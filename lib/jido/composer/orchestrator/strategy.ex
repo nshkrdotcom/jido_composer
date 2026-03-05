@@ -101,9 +101,14 @@ defmodule Jido.Composer.Orchestrator.Strategy do
           AgentTool.to_tool_result(call_id, tool_name, {:error, params[:result]})
       end
 
-    # Scope result under tool name in context
+    # Scope result under tool name in context (only on success)
     scope_key = String.to_existing_atom(tool_name)
-    scoped_result = params[:result] || %{}
+
+    scoped_result =
+      case params[:status] do
+        :ok -> params[:result] || %{}
+        :error -> %{error: inspect(params[:result])}
+      end
 
     agent =
       StratState.update(agent, fn s ->

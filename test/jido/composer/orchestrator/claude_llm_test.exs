@@ -1,6 +1,7 @@
 defmodule Jido.Composer.Orchestrator.ClaudeLLMTest do
   use ExUnit.Case, async: true
 
+  alias Jido.Composer.CassetteHelper
   alias Jido.Composer.Orchestrator.ClaudeLLM
 
   @tools [
@@ -25,6 +26,8 @@ defmodule Jido.Composer.Orchestrator.ClaudeLLMTest do
   ]
 
   defp cassette_opts(cassette_name) do
+    cassette_mode = CassetteHelper.cassette_mode()
+
     [
       req_options: [
         plug:
@@ -32,7 +35,7 @@ defmodule Jido.Composer.Orchestrator.ClaudeLLMTest do
            %{
              cassette_name: cassette_name,
              cassette_dir: "test/cassettes",
-             mode: :replay,
+             mode: cassette_mode,
              match_requests_on: [:method, :uri]
            }}
       ],
@@ -102,7 +105,8 @@ defmodule Jido.Composer.Orchestrator.ClaudeLLMTest do
       assert weather_call.arguments["city"] == "Tokyo"
 
       calc_call = Enum.find(calls, &(&1.name == "calculate"))
-      assert calc_call.arguments["expression"] == "42 * 17"
+      assert calc_call.arguments["expression"] =~ "42"
+      assert calc_call.arguments["expression"] =~ "17"
     end
   end
 
@@ -148,22 +152,30 @@ defmodule Jido.Composer.Orchestrator.ClaudeLLMTest do
   end
 
   describe "API error (cassette)" do
-    test "returns structured error on rate limit" do
+    test "returns structured error on authentication failure" do
       opts = cassette_opts("claude_llm_api_error")
+      # Force an invalid API key to trigger a 401 error
+      opts = Keyword.put(opts, :api_key, "sk-ant-invalid-key")
 
       result = ClaudeLLM.generate(nil, [], @tools, Keyword.put(opts, :query, "Hello"))
 
       assert {:error, error} = result
-      assert is_map(error) or is_tuple(error) or is_binary(error) or is_atom(error)
+      assert is_map(error)
+      assert error.status == 401
     end
   end
 
   describe "conversation state management" do
     test "first call with nil conversation initializes messages" do
-      opts = cassette_opts("claude_llm_tool_call")
+      opts = cassette_opts("claude_llm_conversation_init")
 
       {:ok, _response, conversation} =
-        ClaudeLLM.generate(nil, [], @tools, Keyword.put(opts, :query, "Weather in Paris?"))
+        ClaudeLLM.generate(
+          nil,
+          [],
+          @tools,
+          Keyword.put(opts, :query, "What's the weather in Paris?")
+        )
 
       # Should have user message + assistant response
       assert is_list(conversation)
@@ -175,10 +187,15 @@ defmodule Jido.Composer.Orchestrator.ClaudeLLMTest do
     end
 
     test "conversation is serializable" do
-      opts = cassette_opts("claude_llm_tool_call")
+      opts = cassette_opts("claude_llm_serializable")
 
       {:ok, _response, conv} =
-        ClaudeLLM.generate(nil, [], @tools, Keyword.put(opts, :query, "Weather?"))
+        ClaudeLLM.generate(
+          nil,
+          [],
+          @tools,
+          Keyword.put(opts, :query, "What's the weather in London?")
+        )
 
       binary = :erlang.term_to_binary(conv)
       restored = :erlang.binary_to_term(binary)

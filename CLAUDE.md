@@ -68,6 +68,7 @@ Use `npx openspec <args>` to use openspec.
 - **Integration tests**: Composition and nesting scenarios
 - Use `test/support/` for shared test helpers
 - Tag tests appropriately for filtering
+- **Cassettes**: Tests use ReqCassette for recorded HTTP interactions. Never hand-craft cassettes — always record from live API. To re-record: delete the existing cassette files first, then run `RECORD_CASSETTES=true mix test`. Without the env var, tests replay from existing cassettes.
 
 ### Code Style
 

@@ -10,10 +10,24 @@ defmodule Jido.Composer.CassetteHelper do
     {~r/Bearer\s+[a-zA-Z0-9._-]+/, "Bearer <TOKEN>"}
   ]
 
+  @doc """
+  Returns `:record` or `:replay` based on the `RECORD_CASSETTES` env var.
+
+  When `RECORD_CASSETTES=true`, cassettes are recorded from live API calls.
+  Otherwise, existing cassettes are replayed (default for CI and local dev).
+  """
+  def cassette_mode do
+    if System.get_env("RECORD_CASSETTES") == "true", do: :record, else: :replay
+  end
+
   def default_cassette_opts do
     [
+      mode: cassette_mode(),
+      match_requests_on: [:method, :uri],
+      sequential: true,
       filter_request_headers: @sensitive_headers,
-      filter_response_headers: @sensitive_headers
+      filter_response_headers: @sensitive_headers,
+      filter_sensitive_data: @sensitive_patterns
     ]
   end
 
@@ -24,13 +38,4 @@ defmodule Jido.Composer.CassetteHelper do
   end
 
   def filter_sensitive(other), do: other
-
-  def req_options_for_cassette(cassette_name, opts \\ []) do
-    cassette_dir = Keyword.get(opts, :cassette_dir, "test/cassettes")
-
-    [
-      plug: {ReqCassette, dir: cassette_dir, name: cassette_name},
-      stream: false
-    ]
-  end
 end

@@ -1,8 +1,12 @@
 defmodule Jido.Composer.Integration.OrchestratorTest do
   use ExUnit.Case, async: true
 
+  import ReqCassette
+
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
+  alias Jido.Composer.CassetteHelper
+  alias Jido.Composer.Orchestrator.ClaudeLLM
   alias Jido.Composer.TestSupport.MockLLM
 
   # -- Orchestrator definitions --
@@ -253,6 +257,186 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
       strat = StratState.get(agent)
       assert strat.context[:add] == %{result: 5.0}
       assert strat.context[:echo] == %{echoed: "test"}
+    end
+  end
+
+  # -- Cassette-driven tests using ClaudeLLM --
+
+  # A bare agent for cassette tests (strategy initialized manually with req_options)
+  defmodule CassetteAgent do
+    use Jido.Agent,
+      name: "cassette_orchestrator",
+      description: "Agent for cassette-driven orchestrator tests",
+      schema: []
+  end
+
+  alias Jido.Composer.Orchestrator.Strategy
+
+  defp init_cassette_agent(plug) do
+    strategy_opts = [
+      nodes: [Jido.Composer.TestActions.AddAction, Jido.Composer.TestActions.EchoAction],
+      llm_module: ClaudeLLM,
+      system_prompt: "You are a helpful assistant with math and echo tools.",
+      max_iterations: 10,
+      req_options: [plug: plug]
+    ]
+
+    agent = CassetteAgent.new()
+    ctx = %{strategy_opts: strategy_opts}
+    {agent, _directives} = Strategy.init(agent, ctx)
+    {agent, strategy_opts}
+  end
+
+  defp make_instruction(action, params) do
+    %Jido.Instruction{action: action, params: params}
+  end
+
+  # Executes the full ReAct loop using ClaudeLLM with cassette plug.
+  # LLM calls go through Req -> cassette plug -> canned response.
+  # Tool calls go through Jido.Exec.run -> real action execution.
+  defp execute_cassette_loop(agent, query, strategy_opts) do
+    {agent, directives} =
+      Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: query})], %{})
+
+    execute_cassette_directives(agent, directives, strategy_opts)
+  end
+
+  defp execute_cassette_directives(agent, [], _strategy_opts), do: agent
+
+  defp execute_cassette_directives(agent, [directive | rest], strategy_opts) do
+    case directive do
+      %Directive.RunInstruction{
+        instruction: %Jido.Instruction{action: Jido.Composer.Orchestrator.LLMAction} = instr,
+        result_action: result_action
+      } ->
+        # Execute ClaudeLLM via the LLMAction — this makes a real Req call
+        # which the cassette plug intercepts
+        params = instr.params
+        llm_module = params[:llm_module]
+        conversation = params[:conversation]
+        tool_results = params[:tool_results] || []
+        tools = params[:tools] || []
+        opts = params[:opts] || []
+
+        payload =
+          case llm_module.generate(conversation, tool_results, tools, opts) do
+            {:ok, response, updated_conversation} ->
+              %{
+                status: :ok,
+                result: %{response: response, conversation: updated_conversation},
+                meta: %{}
+              }
+
+            {:error, reason} ->
+              %{status: :error, result: %{error: reason}, meta: %{}}
+          end
+
+        {agent, new_directives} =
+          Strategy.cmd(agent, [make_instruction(result_action, payload)], %{})
+
+        execute_cassette_directives(agent, new_directives ++ rest, strategy_opts)
+
+      %Directive.RunInstruction{
+        instruction: %Jido.Instruction{action: action_module, params: params},
+        result_action: result_action,
+        meta: meta
+      } ->
+        payload =
+          case Jido.Exec.run(action_module, params) do
+            {:ok, result} ->
+              %{status: :ok, result: result, meta: meta || %{}}
+
+            {:error, reason} ->
+              %{status: :error, result: reason, meta: meta || %{}}
+          end
+
+        {agent, new_directives} =
+          Strategy.cmd(agent, [make_instruction(result_action, payload)], %{})
+
+        execute_cassette_directives(agent, new_directives ++ rest, strategy_opts)
+
+      _other ->
+        execute_cassette_directives(agent, rest, strategy_opts)
+    end
+  end
+
+  describe "cassette-driven: single tool call round-trip" do
+    test "ClaudeLLM calls add tool and returns final answer" do
+      with_cassette("orchestrator_single_tool", CassetteHelper.default_cassette_opts(), fn plug ->
+        {agent, strategy_opts} = init_cassette_agent(plug)
+        agent = execute_cassette_loop(agent, "What is 5 + 3?", strategy_opts)
+
+        strat = StratState.get(agent)
+        assert strat.status == :completed
+        assert strat.result =~ "8"
+        assert strat.iteration >= 2
+
+        # Tool result scoped under tool name
+        assert strat.context[:add][:result] in [8, 8.0]
+      end)
+    end
+  end
+
+  describe "cassette-driven: multi-tool parallel" do
+    test "ClaudeLLM calls add and echo tools in parallel" do
+      with_cassette("orchestrator_multi_tool", CassetteHelper.default_cassette_opts(), fn plug ->
+        {agent, strategy_opts} = init_cassette_agent(plug)
+
+        agent =
+          execute_cassette_loop(
+            agent,
+            "Use the add tool with value=10 and amount=5, and use the echo tool with message='hello world'. Call both tools now.",
+            strategy_opts
+          )
+
+        strat = StratState.get(agent)
+        assert strat.status == :completed
+        assert strat.context[:add][:result] in [15, 15.0]
+        assert strat.context[:echo][:echoed] == "hello world"
+      end)
+    end
+  end
+
+  describe "cassette-driven: multi-turn conversation" do
+    test "ClaudeLLM makes two rounds of tool calls then final answer" do
+      with_cassette("orchestrator_multi_turn", CassetteHelper.default_cassette_opts(), fn plug ->
+        {agent, strategy_opts} = init_cassette_agent(plug)
+
+        agent =
+          execute_cassette_loop(
+            agent,
+            "First use the add tool with value=1 and amount=2. Then after you get the result, use the echo tool with message='the sum is 3'. Do these one at a time.",
+            strategy_opts
+          )
+
+        strat = StratState.get(agent)
+        assert strat.status == :completed
+        assert strat.iteration >= 3
+
+        # Conversation built up across turns
+        assert is_list(strat.conversation)
+        assert length(strat.conversation) > 2
+      end)
+    end
+  end
+
+  describe "cassette-driven: direct final answer" do
+    test "ClaudeLLM answers without tool calls" do
+      with_cassette(
+        "orchestrator_final_answer_only",
+        CassetteHelper.default_cassette_opts(),
+        fn plug ->
+          {agent, strategy_opts} = init_cassette_agent(plug)
+          agent = execute_cassette_loop(agent, "Say hello, do not use any tools.", strategy_opts)
+
+          strat = StratState.get(agent)
+          assert strat.status == :completed
+          assert is_binary(strat.result)
+          assert String.length(strat.result) > 0
+          assert strat.iteration == 1
+          assert strat.context == %{}
+        end
+      )
     end
   end
 

@@ -95,13 +95,15 @@ defmodule Jido.Composer.Orchestrator.AgentToolTest do
       assert result.result == %{error: "something broke"}
     end
 
-    test "handles error tuple with map reason" do
+    test "handles error tuple with map reason by stringifying" do
       result =
         AgentTool.to_tool_result("call_789", "action", {:error, %{code: 500, msg: "internal"}})
 
       assert result.id == "call_789"
       assert result.name == "action"
-      assert result.result == %{error: %{code: 500, msg: "internal"}}
+      assert is_binary(result.result.error)
+      assert result.result.error =~ "500"
+      assert result.result.error =~ "internal"
     end
   end
 end

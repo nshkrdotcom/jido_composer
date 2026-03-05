@@ -56,6 +56,13 @@ defmodule Jido.Composer.Orchestrator.AgentTool do
   end
 
   def to_tool_result(call_id, node_name, {:error, reason}) do
-    %{id: call_id, name: node_name, result: %{error: reason}}
+    error_message =
+      case reason do
+        %{message: msg} when is_binary(msg) -> msg
+        bin when is_binary(bin) -> bin
+        other -> inspect(other)
+      end
+
+    %{id: call_id, name: node_name, result: %{error: error_message}}
   end
 end
