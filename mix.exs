@@ -102,7 +102,7 @@ defmodule JidoComposer.MixProject do
 
   defp docs do
     [
-      main: "JidoComposer",
+      main: "Jido.Composer",
       extras: ["README.md", "PLAN.md"]
     ]
   end

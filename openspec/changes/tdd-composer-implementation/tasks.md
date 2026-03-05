@@ -2,19 +2,19 @@
 
 > **References**: `PLAN.md` Step 1 (project scaffold). `docs/design/testing.md` — test directory structure, cassette helper patterns, sensitive data filters. `prototypes/learnings.md` — all sections provide patterns for test helpers.
 
-- [ ] 1.1 Create `lib/jido/composer/` directory structure matching PLAN.md file layout
-- [ ] 1.2 Create `Jido.Composer` top-level module with moduledoc (replace placeholder)
-- [ ] 1.3 Create `test/support/test_actions.ex` with stub action modules (AddAction, MultiplyAction, FailAction, SlowAction, etc.)
-- [ ] 1.4 Create `test/support/test_agents.ex` with stub agent modules for composition tests
-- [ ] 1.5 Create `test/support/cassette_helper.ex` with centralized sensitive data filters and cassette setup helpers
-- [ ] 1.6 Update `test/test_helper.exs` to configure ExUnit and load support modules
+- [x] 1.1 Create `lib/jido/composer/` directory structure matching PLAN.md file layout
+- [x] 1.2 Create `Jido.Composer` top-level module with moduledoc (replace placeholder)
+- [x] 1.3 Create `test/support/test_actions.ex` with stub action modules (AddAction, MultiplyAction, FailAction, SlowAction, etc.)
+- [x] 1.4 Create `test/support/test_agents.ex` with stub agent modules for composition tests
+- [x] 1.5 Create `test/support/cassette_helper.ex` with centralized sensitive data filters and cassette setup helpers
+- [x] 1.6 Update `test/test_helper.exs` to configure ExUnit and load support modules
 
 ## 2. Error Module
 
 > **References**: `docs/design/glossary.md` — error terminology. `PLAN.md` — error.ex in file structure. Uses Splode for structured errors (see `mix.exs` dependency `{:splode, "~> 0.3.0"}`). Moved early because Node, Machine, Strategy, and all subsequent modules need Composer-specific error types.
 
-- [ ] 2.1 Write tests for Composer-specific error types in `test/jido/composer/error_test.exs`
-- [ ] 2.2 Implement `Jido.Composer.Error` in `lib/jido/composer/error.ex` using Splode
+- [x] 2.1 Write tests for Composer-specific error types in `test/jido/composer/error_test.exs`
+- [x] 2.2 Implement `Jido.Composer.Error` in `lib/jido/composer/error.ex` using Splode
 
 ---
 

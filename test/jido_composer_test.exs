@@ -1,8 +1,7 @@
-defmodule JidoComposerTest do
+defmodule Jido.ComposerTest do
   use ExUnit.Case
-  doctest JidoComposer
 
-  test "greets the world" do
-    assert JidoComposer.hello() == :world
+  test "module exists" do
+    assert Code.ensure_loaded?(Jido.Composer)
   end
 end
