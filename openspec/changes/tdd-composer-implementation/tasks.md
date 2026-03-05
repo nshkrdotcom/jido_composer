@@ -61,8 +61,8 @@
 
 > **References**: `docs/design/testing.md` — Integration tests table (linear workflow, branching, error handling, nested). `docs/design/workflow/README.md` — ETL pipeline state diagram example. `docs/design/nodes/context-flow.md` — full scoped accumulation flow. `docs/design/use-cases.md` — concrete workflow scenarios.
 
-- [ ] 8.1 Write integration tests in `test/integration/workflow_test.exs` (linear pipeline, branching, error handling, context isolation)
-- [ ] 8.2 Fix any issues discovered during integration testing
+- [x] 8.1 Write integration tests in `test/integration/workflow_test.exs` (linear pipeline, branching, error handling, context isolation)
+- [x] 8.2 Fix any issues discovered during integration testing
 
 ---
 

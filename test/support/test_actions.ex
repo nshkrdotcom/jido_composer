@@ -86,4 +86,86 @@ defmodule Jido.Composer.TestActions do
       {:ok, %{echoed: message}}
     end
   end
+
+  defmodule ExtractAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "extract",
+      description: "Simulates data extraction, returns raw records",
+      schema: [
+        source: [type: :string, required: true, doc: "Data source identifier"]
+      ]
+
+    def run(%{source: source}, _context) do
+      {:ok, %{records: [%{id: 1, source: source}, %{id: 2, source: source}], count: 2}}
+    end
+  end
+
+  defmodule TransformAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "transform",
+      description: "Transforms extracted records by uppercasing source",
+      schema: [
+        extract: [type: :map, required: false, doc: "Results from extract step"]
+      ]
+
+    def run(params, _context) do
+      records = get_in(params, [:extract, :records]) || []
+
+      transformed =
+        Enum.map(records, fn rec ->
+          Map.update(rec, :source, "", &String.upcase/1)
+        end)
+
+      {:ok, %{records: transformed, count: length(transformed)}}
+    end
+  end
+
+  defmodule LoadAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "load",
+      description: "Simulates loading records into storage",
+      schema: [
+        transform: [type: :map, required: false, doc: "Results from transform step"]
+      ]
+
+    def run(params, _context) do
+      records = get_in(params, [:transform, :records]) || []
+      {:ok, %{loaded: length(records), status: :complete}}
+    end
+  end
+
+  defmodule ValidateAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "validate",
+      description: "Validates data, succeeds or fails based on valid flag",
+      schema: [
+        valid: [type: :boolean, required: true, doc: "Whether validation passes"]
+      ]
+
+    def run(%{valid: true}, _context) do
+      {:ok, %{validated: true}}
+    end
+
+    def run(%{valid: false}, _context) do
+      {:error, "validation failed"}
+    end
+  end
+
+  defmodule AccumulatorAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "accumulator",
+      description: "Appends a tag to an accumulator list",
+      schema: [
+        tag: [type: :string, required: true, doc: "Tag to append"]
+      ]
+
+    def run(%{tag: tag}, _context) do
+      {:ok, %{tag: tag}}
+    end
+  end
 end
