@@ -1,0 +1,145 @@
+# Glossary
+
+Single source of truth for domain terms used throughout the Jido Composer design
+documentation.
+
+---
+
+### Action
+
+A discrete, composable unit of functionality in the Jido ecosystem. Actions
+implement a `run(params, context)` callback that returns
+`{:ok, result_map}` or `{:error, reason}`. Defined via `use Jido.Action`.
+
+### Agent
+
+An immutable data structure that holds state and processes commands via a
+[Strategy](#strategy). Agents are purely functional — OTP integration is handled
+separately by AgentServer. Defined via `use Jido.Agent`.
+
+### AgentServer
+
+The OTP GenServer runtime that hosts an [Agent](#agent), processes
+[Signals](#signal), executes [Directives](#directive), and manages child
+processes. Jido Composer strategies run within AgentServer.
+
+### Context
+
+A map that flows through a chain of [Nodes](#node). Each node receives context
+as input and produces updated context as output. Context accumulates results via
+[deep merge](#deep-merge).
+
+### Directive
+
+A pure description of an external effect for the runtime to execute. Agents and
+strategies emit directives but never interpret them. Core directives include
+Emit, RunInstruction, SpawnAgent, Schedule, and Stop. See
+[Overview — Directive System](overview.md#directive-system).
+
+### Deep Merge
+
+The monoidal operation for [context](#context) accumulation. Nested maps are
+merged recursively rather than overwritten. Provided by the `DeepMerge` library.
+See [Context Flow](nodes/context-flow.md#deep-merge-semantics) for semantics and
+[Foundations](foundations.md) for the algebraic properties.
+
+### DSL
+
+Compile-time macro layer (`use Jido.Composer.Workflow` or
+`use Jido.Composer.Orchestrator`) that validates configuration and generates a
+Jido Agent wired to the appropriate [Strategy](#strategy).
+
+### Error
+
+A structured error type defined via the Splode library in
+`Jido.Composer.Error`. Errors are classified into classes (Validation,
+Transition, Execution, Communication, Orchestration) to support pattern matching
+and consistent formatting. See
+[Overview — Error Handling](overview.md#error-handling).
+
+### Instruction
+
+A work order that wraps an [Action](#action) with parameters, context, and
+runtime options. Instructions are the unit of execution passed to
+RunInstruction directives. Defined in `Jido.Instruction`.
+
+### LLM Behaviour
+
+An abstract callback interface for language model integration. Any module
+implementing `Jido.Composer.Orchestrator.LLM` can serve as the decision engine
+for an [Orchestrator](#orchestrator). See
+[LLM Behaviour](orchestrator/llm-behaviour.md).
+
+### Machine
+
+The pure FSM data structure used by the [Workflow](#workflow) pattern. Holds
+current state, transition rules, node bindings, accumulated context, and
+execution history. See [State Machine](workflow/state-machine.md).
+
+### Node
+
+The uniform interface all [Workflow](#workflow) and [Orchestrator](#orchestrator)
+participants implement. A node is a function from context to context:
+`run(context, opts) -> {:ok, context} | {:ok, context, outcome} | {:error, reason}`.
+See [Nodes](nodes/README.md).
+
+### Orchestrator
+
+A composition pattern where an [LLM](#llm-behaviour) dynamically selects and
+invokes available [Nodes](#node) at runtime using a ReAct-style loop. See
+[Orchestrator](orchestrator/README.md).
+
+### Outcome
+
+An atom returned by a [Node](#node) alongside its result context. Outcomes drive
+[Workflow](#workflow) transitions (e.g., `:ok`, `:error`, `:invalid`). The
+default outcome when none is specified is `:ok`.
+
+### Signal
+
+The universal message format in Jido, implementing the CloudEvents v1.0.2
+specification. Signals carry typed, structured payloads and are routed to
+strategies via signal routes. Defined in `Jido.Signal`.
+
+### Signal Route
+
+A mapping from a signal type string to a strategy command target. Strategies
+declare signal routes so the AgentServer knows how to route incoming signals
+to the appropriate `cmd/3` invocation.
+
+### Snapshot
+
+A stable, cross-strategy view of execution state. Strategies expose their
+internal state through a `Strategy.Snapshot` struct with fields for status,
+completion, result, and details — without exposing internal structure.
+
+### Strategy
+
+A behaviour that controls how an [Agent](#agent) processes commands. Strategies
+implement `cmd/3` (required), plus optional `init/2`, `tick/2`, `snapshot/2`,
+`action_spec/1`, and `signal_routes/1` callbacks. Both Workflow and Orchestrator
+are implemented as strategies. See [Overview — Strategy System](overview.md#strategy-system).
+
+### Strategy State
+
+Strategy-specific data stored under the reserved key `__strategy__` in
+`agent.state`. Managed via `Jido.Agent.Strategy.State` helpers (get, put,
+update, status, terminal?).
+
+### Terminal State
+
+A [Machine](#machine) state from which no further execution occurs. Default
+terminal states are `:done` and `:failed`. When the machine reaches a terminal
+state, the [Workflow](#workflow) is complete.
+
+### Tool
+
+A structured description of a [Node](#node) formatted for LLM consumption. Tools
+have a name, description, and JSON Schema parameters. The AgentTool adapter
+converts nodes to tools and maps tool call results back to node execution.
+
+### Workflow
+
+A composition pattern where a deterministic [FSM](#machine) drives execution
+through a sequence of [Nodes](#node). Transitions are fully determined by
+[Outcomes](#outcome) — no LLM decisions. See [Workflow](workflow/README.md).
