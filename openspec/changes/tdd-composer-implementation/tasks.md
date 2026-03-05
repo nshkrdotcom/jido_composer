@@ -106,8 +106,8 @@
 
 > **References**: `docs/design/testing.md` — Integration/E2E test tables. `docs/design/orchestrator/strategy.md` — full ReAct loop execution. `docs/design/use-cases.md` — orchestrator scenarios.
 
-- [ ] 13.1 Write cassette-driven integration tests in `test/integration/orchestrator_test.exs` (full ReAct loop with ClaudeLLM cassettes)
-- [ ] 13.2 Fix any issues discovered during integration testing
+- [x] 13.1 Write cassette-driven integration tests in `test/integration/orchestrator_test.exs` (full ReAct loop with ClaudeLLM cassettes)
+- [x] 13.2 Fix any issues discovered during integration testing
 
 ---
 
