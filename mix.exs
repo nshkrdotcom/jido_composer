@@ -34,7 +34,15 @@ defmodule JidoComposer.MixProject do
 
   defp deps do
     [
-      # Runtime (tooling/utilities only — jido deps deferred)
+      # Jido ecosystem
+      {:jido, "~> 2.0"},
+      {:jido_action, "~> 2.0"},
+      {:jido_signal, "~> 2.0"},
+
+      # Runtime
+      {:zoi, "~> 0.17"},
+      {:splode, "~> 0.3.0"},
+      {:deep_merge, "~> 1.0"},
       {:jason, "~> 1.4"},
       {:nimble_options, "~> 1.1"},
       {:telemetry, "~> 1.3"},
