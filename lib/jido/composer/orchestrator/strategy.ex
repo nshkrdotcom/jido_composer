@@ -12,6 +12,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
+  alias Jido.Composer.Directive.SuspendForHuman
+  alias Jido.Composer.HITL.{ApprovalRequest, ApprovalResponse}
   alias Jido.Composer.Node.ActionNode
   alias Jido.Composer.Node.AgentNode
   alias Jido.Composer.Orchestrator.AgentTool
@@ -25,6 +27,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     node_modules = opts[:nodes] || []
     nodes = build_nodes(node_modules)
     tools = Enum.map(nodes, fn {_name, node} -> AgentTool.to_tool(node) end)
+
+    gated_node_names = MapSet.new(opts[:gated_nodes] || [])
 
     agent =
       StratState.put(agent, %{
@@ -42,7 +46,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         max_iterations: opts[:max_iterations] || 10,
         req_options: opts[:req_options] || [],
         result: nil,
-        query: nil
+        query: nil,
+        gated_node_names: gated_node_names,
+        gated_calls: %{}
       })
 
     {agent, []}
@@ -125,15 +131,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         }
       end)
 
-    state = StratState.get(agent)
-
-    if state.pending_tool_calls == [] do
-      # All tools done, trigger next LLM call
-      agent = StratState.update(agent, fn s -> %{s | status: :awaiting_llm} end)
-      emit_llm_call(agent)
-    else
-      {agent, []}
-    end
+    check_all_tools_done(agent)
   end
 
   def cmd(agent, [%Jido.Instruction{action: :orchestrator_child_started} | _], _ctx) do
@@ -181,18 +179,65 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         }
       end)
 
-    state = StratState.get(agent)
-
-    if state.pending_tool_calls == [] do
-      agent = StratState.update(agent, fn s -> %{s | status: :awaiting_llm} end)
-      emit_llm_call(agent)
-    else
-      {agent, []}
-    end
+    check_all_tools_done(agent)
   end
 
   def cmd(agent, [%Jido.Instruction{action: :orchestrator_child_exit} | _], _ctx) do
     {agent, []}
+  end
+
+  def cmd(agent, [%Jido.Instruction{action: :hitl_response} = instr | _], _ctx) do
+    strat = StratState.get(agent)
+    response_data = instr.params
+    request_id = response_data.request_id
+
+    case Map.get(strat.gated_calls, request_id) do
+      nil ->
+        {agent,
+         [
+           %Directive.Error{
+             error: %RuntimeError{message: "No pending approval for #{request_id}"}
+           }
+         ]}
+
+      %{request: request, call: call} ->
+        {:ok, response} =
+          ApprovalResponse.new(
+            request_id: response_data.request_id,
+            decision: response_data.decision,
+            data: Map.get(response_data, :data),
+            respondent: Map.get(response_data, :respondent),
+            comment: Map.get(response_data, :comment),
+            responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
+          )
+
+        case ApprovalResponse.validate(response, request) do
+          :ok ->
+            handle_approval_decision(agent, request_id, response, call)
+
+          {:error, reason} ->
+            {agent,
+             [
+               %Directive.Error{
+                 error: %RuntimeError{message: "HITL validation failed: #{reason}"}
+               }
+             ]}
+        end
+    end
+  end
+
+  def cmd(agent, [%Jido.Instruction{action: :hitl_timeout} = instr | _], _ctx) do
+    strat = StratState.get(agent)
+    request_id = instr.params[:request_id]
+
+    case Map.get(strat.gated_calls, request_id) do
+      %{call: call} ->
+        # Treat timeout as rejection
+        handle_approval_rejection(agent, request_id, call, "Approval timed out")
+
+      nil ->
+        {agent, []}
+    end
   end
 
   def cmd(agent, _instructions, _ctx) do
@@ -207,7 +252,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       {"composer.orchestrator.query", {:strategy_cmd, :orchestrator_start}},
       {"composer.orchestrator.child.result", {:strategy_cmd, :orchestrator_child_result}},
       {"jido.agent.child.started", {:strategy_cmd, :orchestrator_child_started}},
-      {"jido.agent.child.exit", {:strategy_cmd, :orchestrator_child_exit}}
+      {"jido.agent.child.exit", {:strategy_cmd, :orchestrator_child_exit}},
+      {"composer.hitl.response", {:strategy_cmd, :hitl_response}},
+      {"composer.hitl.timeout", {:strategy_cmd, :hitl_timeout}}
     ]
   end
 
@@ -273,41 +320,85 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
       {agent, []}
     else
-      call_ids = Enum.map(calls, & &1.id)
+      {ungated, gated} =
+        Enum.split_with(calls, fn call ->
+          not MapSet.member?(state.gated_node_names, call.name)
+        end)
+
+      ungated_ids = Enum.map(ungated, & &1.id)
+
+      # Build gated_calls map: request_id -> %{request, call}
+      gated_entries =
+        Map.new(gated, fn call ->
+          {:ok, request} =
+            ApprovalRequest.new(
+              prompt: "Approve tool call: #{call.name}(#{inspect(call.arguments)})",
+              allowed_responses: [:approved, :rejected],
+              visible_context: call.arguments,
+              metadata: %{tool_call_id: call.id, tool_name: call.name}
+            )
+
+          {request.id, %{request: request, call: call}}
+        end)
 
       agent =
         StratState.update(agent, fn s ->
-          %{s | status: :awaiting_tools, pending_tool_calls: call_ids, completed_tool_results: []}
+          new_status =
+            cond do
+              gated == [] -> :awaiting_tools
+              ungated == [] -> :awaiting_approval
+              true -> :awaiting_tools_and_approval
+            end
+
+          %{
+            s
+            | status: new_status,
+              pending_tool_calls: ungated_ids,
+              completed_tool_results: [],
+              gated_calls: gated_entries
+          }
         end)
 
-      directives =
-        Enum.map(calls, fn call ->
-          node = state.nodes[call.name]
-          context = AgentTool.to_context(call)
-
-          case node do
-            %ActionNode{action_module: action_module} ->
-              instruction = %Jido.Instruction{
-                action: action_module,
-                params: context
-              }
-
-              %Directive.RunInstruction{
-                instruction: instruction,
-                result_action: :orchestrator_tool_result,
-                meta: %{call_id: call.id, tool_name: call.name}
-              }
-
-            %AgentNode{agent_module: agent_module, opts: opts} ->
-              %Directive.SpawnAgent{
-                tag: {:tool_call, call.id, call.name},
-                agent: agent_module,
-                opts: Map.new(opts) |> Map.put(:context, context)
-              }
-          end
+      # Build directives for ungated calls
+      ungated_directives =
+        Enum.map(ungated, fn call ->
+          build_tool_directive(call, state.nodes)
         end)
 
-      {agent, directives}
+      # Build SuspendForHuman directives for gated calls
+      gated_directives =
+        Enum.map(gated_entries, fn {_req_id, %{request: request}} ->
+          {:ok, directive} = SuspendForHuman.new(approval_request: request)
+          directive
+        end)
+
+      {agent, ungated_directives ++ gated_directives}
+    end
+  end
+
+  defp build_tool_directive(call, nodes) do
+    node = nodes[call.name]
+    context = AgentTool.to_context(call)
+
+    case node do
+      %ActionNode{action_module: action_module} ->
+        instruction = %Jido.Instruction{
+          action: action_module,
+          params: context
+        }
+
+        %Directive.RunInstruction{
+          instruction: instruction,
+          result_action: :orchestrator_tool_result,
+          meta: %{call_id: call.id, tool_name: call.name}
+        }
+
+      %AgentNode{agent_module: agent_module, opts: opts} ->
+        %Directive.SpawnAgent{
+          tag: {:tool_call, call.id, call.name},
+          agent: agent_module,
+          opts: Map.new(opts) |> Map.put(:context, context)
+        }
     end
   end
 
@@ -336,6 +427,85 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     }
 
     {agent, [directive]}
+  end
+
+  defp handle_approval_decision(agent, request_id, response, call) do
+    case response.decision do
+      :approved ->
+        # Remove from gated_calls, dispatch the tool
+        state = StratState.get(agent)
+
+        agent =
+          StratState.update(agent, fn s ->
+            new_gated = Map.delete(s.gated_calls, request_id)
+            new_pending = s.pending_tool_calls ++ [call.id]
+
+            new_status =
+              cond do
+                new_gated == %{} and new_pending != [] -> :awaiting_tools
+                new_gated == %{} -> :awaiting_tools
+                new_pending != [] -> :awaiting_tools_and_approval
+                true -> :awaiting_approval
+              end
+
+            %{s | gated_calls: new_gated, pending_tool_calls: new_pending, status: new_status}
+          end)
+
+        directive = build_tool_directive(call, state.nodes)
+        {agent, [directive]}
+
+      :rejected ->
+        comment = response.comment || "No reason provided"
+        handle_approval_rejection(agent, request_id, call, comment)
+    end
+  end
+
+  defp handle_approval_rejection(agent, request_id, call, reason) do
+    # Inject synthetic rejection result
+    tool_result =
+      AgentTool.to_tool_result(
+        call.id,
+        call.name,
+        {:error, "REJECTED by human reviewer. Reason: #{reason}. Choose a different approach."}
+      )
+
+    scope_key = String.to_existing_atom(call.name)
+    rejection_data = %{error: "REJECTED: #{reason}"}
+
+    agent =
+      StratState.update(agent, fn s ->
+        new_gated = Map.delete(s.gated_calls, request_id)
+        new_completed = s.completed_tool_results ++ [tool_result]
+        new_context = deep_merge(s.context, %{scope_key => rejection_data})
+
+        %{
+          s
+          | gated_calls: new_gated,
+            completed_tool_results: new_completed,
+            context: new_context
+        }
+      end)
+
+    check_all_tools_done(agent)
+  end
+
+  defp check_all_tools_done(agent) do
+    state = StratState.get(agent)
+
+    if state.pending_tool_calls == [] and state.gated_calls == %{} do
+      agent = StratState.update(agent, fn s -> %{s | status: :awaiting_llm} end)
+      emit_llm_call(agent)
+    else
+      new_status =
+        cond do
+          state.gated_calls == %{} -> :awaiting_tools
+          state.pending_tool_calls == [] -> :awaiting_approval
+          true -> :awaiting_tools_and_approval
+        end
+
+      agent = StratState.update(agent, fn s -> %{s | status: new_status} end)
+      {agent, []}
+    end
   end
 
   defp build_nodes(modules) when is_list(modules) do

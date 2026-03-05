@@ -193,9 +193,9 @@
 
 > **References**: `docs/design/hitl/strategy-integration.md` — Orchestrator approval gate: partition tool calls (gated vs ungated), mixed states (`awaiting_tools_and_approval`), rejection handling (synthetic tool result injection), rejection policy options (`:continue_siblings`, `:cancel_siblings`, `:abort_iteration`). `prototypes/test_hitl_assumptions.exs` — approval gate partition, rejection tests.
 
-- [ ] 23.1 Write tests in `test/integration/orchestrator_hitl_test.exs` (gated tool call, mixed gated/ungated, rejection with synthetic result)
-- [ ] 23.2 Update Orchestrator.Strategy to support `requires_approval` metadata and approval gates
-- [ ] 23.3 Fix any issues discovered during approval gate testing
+- [x] 23.1 Write tests in `test/integration/orchestrator_hitl_test.exs` (gated tool call, mixed gated/ungated, rejection with synthetic result)
+- [x] 23.2 Update Orchestrator.Strategy to support `requires_approval` metadata and approval gates
+- [x] 23.3 Fix any issues discovered during approval gate testing
 
 ## 24. HITL Persistence
 
