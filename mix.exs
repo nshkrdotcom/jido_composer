@@ -49,7 +49,8 @@ defmodule JidoComposer.MixProject do
 
       # Dev/Test
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.34", only: [:dev, :test], runtime: false}
+      {:ex_doc, "~> 0.34", only: [:dev, :test], runtime: false},
+      {:req_cassette, "~> 0.5.2", only: :test}
     ]
   end
 

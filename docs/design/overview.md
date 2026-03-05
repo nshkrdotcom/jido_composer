@@ -216,6 +216,7 @@ See [Glossary — Error](glossary.md#error) for the term definition.
 | `jason`          | JSON serialization for [AgentTool](orchestrator/README.md#agenttool-adapter) parameter schemas                                                                |
 | `nimble_options` | Legacy schema format support for node parameter definitions                                                                                                   |
 | `telemetry`      | Execution metrics and tracing for node execution, strategy transitions, and LLM calls                                                                         |
+| `req_cassette`   | Test-only. Records and replays HTTP interactions as [cassettes](testing.md). Preferred over mocks for LLM response testing                                    |
 
 ### Architectural References
 

@@ -39,6 +39,11 @@ shared by all participants.
   - [Strategy](orchestrator/strategy.md) — Orchestrator strategy lifecycle and
     ReAct loop
 
+## Testing
+
+- [Testing Strategy](testing.md) — TDD approach, cassette-based testing with
+  ReqCassette, req_options propagation, and streaming constraints
+
 ## Reference
 
 - [Glossary](glossary.md) — Domain terms and definitions

@@ -20,6 +20,7 @@ The strategy stores its state under `agent.state.__strategy__`:
 | `context`            | map                         | Accumulated [context](../nodes/context-flow.md)                     |
 | `iteration`          | integer                     | Current loop iteration                                              |
 | `max_iterations`     | integer                     | Safety limit                                                        |
+| `req_options`        | keyword                     | Opaque HTTP options forwarded to [LLM generate/3](llm-behaviour.md) |
 | `result`             | any                         | Final answer when complete                                          |
 
 ## Status Lifecycle
@@ -109,6 +110,12 @@ call in an internal action and emits a RunInstruction directive. This action:
 
 The result is routed back to `cmd/3` as `:orchestrator_llm_result`. This keeps
 the strategy pure and testable.
+
+The `opts` passed to `generate/3` include any `:req_options` from the
+strategy configuration. This enables [cassette-based testing](../testing.md)
+by injecting a plug that intercepts HTTP calls. The strategy treats
+`req_options` as opaque — it passes them through without inspection. See
+[LLM Behaviour — Req Options Propagation](llm-behaviour.md#req-options-propagation).
 
 ## Tool Execution
 

@@ -99,14 +99,15 @@ the calls that produced them.
 
 The Orchestrator DSL (`use Jido.Composer.Orchestrator`) configures:
 
-| Option           | Purpose                                                            |
-| ---------------- | ------------------------------------------------------------------ |
-| `name`           | Agent name (used as tool name when nested)                         |
-| `description`    | What this orchestrator does (used as tool description when nested) |
-| `llm`            | Module implementing the [LLM Behaviour](llm-behaviour.md)          |
-| `nodes`          | List of available nodes (actions and agents)                       |
-| `system_prompt`  | Instructions for the LLM's decision-making                         |
-| `max_iterations` | Safety limit on the ReAct loop (default: 10)                       |
+| Option           | Purpose                                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- |
+| `name`           | Agent name (used as tool name when nested)                                                                      |
+| `description`    | What this orchestrator does (used as tool description when nested)                                              |
+| `llm`            | Module implementing the [LLM Behaviour](llm-behaviour.md)                                                       |
+| `nodes`          | List of available nodes (actions and agents)                                                                    |
+| `system_prompt`  | Instructions for the LLM's decision-making                                                                      |
+| `max_iterations` | Safety limit on the ReAct loop (default: 10)                                                                    |
+| `req_options`    | Opaque Req HTTP options forwarded to [LLM generate/3](llm-behaviour.md#req-options-propagation) (default: `[]`) |
 
 The DSL auto-wraps plain action modules as ActionNodes and agent modules as
 AgentNodes, then generates a Jido Agent wired to the Orchestrator Strategy.

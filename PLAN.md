@@ -444,52 +444,76 @@ ETLWorkflow appears as a single tool to the Coordinator's LLM. When selected, it
 
 ---
 
-## Implementation Order
+## Implementation Order (TDD)
 
-1. **Project scaffold** — mix.exs, basic module structure
-2. **Node behaviour** — the foundational interface
-3. **ActionNode** — thin adapter, testable immediately with simple actions
-4. **Workflow.Machine** — pure FSM struct, fully unit-testable
-5. **Workflow.Strategy** — the strategy implementation, tested with mock actions
-6. **Workflow DSL** — macro wrapping `use Jido.Agent`
-7. **AgentNode** — requires agent spawning, tested with simple agent
-8. **Workflow + AgentNode integration** — test sub-agent nodes in workflows
-9. **LLM behaviour** — abstract interface
-10. **AgentTool** — node-to-tool conversion
-11. **Orchestrator.Strategy** — ReAct loop with LLM behaviour
-12. **Orchestrator DSL** — macro
-13. **Nesting integration tests** — workflow inside orchestrator, etc.
+Each step follows a test-first pattern: write the test, verify it fails,
+implement, verify it passes, run `mix precommit`. See
+[Testing Strategy](docs/design/testing.md) for the full approach.
 
-Steps 1-6 and 9-10 can be developed in parallel tracks.
+Cassettes are preferred over mocks wherever HTTP interactions occur. For the
+Orchestrator track, cassettes are recorded early so tests drive development
+against real LLM response structures.
+
+### Workflow Track
+
+1. **Project scaffold** — mix.exs, basic module structure, test helpers
+2. **Node behaviour** — write test for contract, then implement
+3. **ActionNode** — write test for deep merge accumulation, then implement
+4. **Workflow.Machine** — write test for transitions/wildcards/terminals, then implement
+5. **Workflow.Strategy** — write test for directive emission with stub nodes, then implement
+6. **Workflow DSL** — write test for compile-time validation + generated functions, then implement
+7. **Workflow integration tests** — linear, branching, error handling workflows
+
+### Orchestrator Track (parallel with Workflow Track from step 5)
+
+8. **LLM behaviour** — define callback contract, write cassette-based test for a reference implementation
+9. **AgentTool** — write test for node-to-tool conversion, then implement
+10. **Record LLM cassettes** — capture real API responses for tool calling, multi-turn, errors
+11. **Orchestrator.Strategy** — write cassette-driven tests for ReAct loop, then implement
+12. **Orchestrator DSL** — write test for generated functions, then implement
+
+### Composition Track
+
+13. **AgentNode** — write test for struct/mode validation, then implement
+14. **Workflow + AgentNode integration** — write test for sub-agent nodes in workflows
+15. **Orchestrator + Workflow nesting** — write cassette-driven test for workflow-as-tool
+16. **End-to-end tests** — full orchestration flows with recorded LLM cassettes
 
 ---
 
 ## Verification
 
-1. **Unit tests**: Each module has dedicated tests
+1. **Unit tests**: Each module has dedicated tests (cassette-driven where HTTP is involved)
    - Machine: transition validation, wildcard fallbacks, terminal detection
    - ActionNode: context accumulation via deep merge
-   - AgentNode: spawn/signal/result lifecycle
-   - Workflow Strategy: full FSM execution with action and agent nodes
-   - Orchestrator Strategy: LLM loop with mock LLM behaviour
+   - AgentNode: struct construction, mode validation
+   - Workflow Strategy: FSM execution with stub nodes, directive emission
+   - LLM implementations: response parsing against real cassettes
+   - Orchestrator Strategy: ReAct loop with cassette-driven LLM responses
 
-2. **Integration tests**:
+2. **Integration tests** (cassette-driven for Orchestrator scenarios):
    - Linear workflow (A → B → C → done)
    - Branching workflow (A → B | C based on outcome)
    - Error handling workflow (any error → failed state)
    - Nested workflow (workflow node inside workflow)
-   - Orchestrator with mixed action/agent nodes
-   - Orchestrator calling a workflow as a tool
+   - Orchestrator single tool call (cassette)
+   - Orchestrator multi-turn conversation (cassette)
+   - Orchestrator calling a workflow as a tool (cassette)
    - Streaming agent node bubbling events
 
-3. **Compile-time validation**:
+3. **End-to-end tests** (all cassette-driven):
+   - Full orchestration flows against recorded LLM responses
+   - Nested compositions with cross-boundary LLM calls
+   - Error response handling (rate limits, malformed requests)
+
+4. **Compile-time validation**:
    - DSL warns on unreachable states
    - DSL errors on missing node definitions
    - DSL errors on transitions referencing undefined states
 
-4. **Run tests**: `mix test`
-5. **Type checking**: `mix dialyzer`
-6. **Code quality**: `mix credo --min-priority high`
+5. **Run tests**: `mix test`
+6. **Type checking**: `mix dialyzer`
+7. **Code quality**: `mix credo --min-priority high`
 
 ---
 

@@ -138,6 +138,21 @@ A structured description of a [Node](#node) formatted for LLM consumption. Tools
 have a name, description, and JSON Schema parameters. The AgentTool adapter
 converts nodes to tools and maps tool call results back to node execution.
 
+### Cassette
+
+A JSON file that records HTTP request/response pairs for test replay. Created
+by [ReqCassette](https://hexdocs.pm/req_cassette) during a recording run and
+replayed in subsequent test runs without network access. Cassettes are the
+preferred test data source over mocks. See [Testing Strategy](testing.md).
+
+### Req Options
+
+A keyword list passed through the [LLM Behaviour](#llm-behaviour) `opts`
+under the `:req_options` key. Merged into outgoing `Req.request!/1` calls by
+LLM implementations. Used to inject the [Cassette](#cassette) plug and
+control streaming. See
+[Req Options Propagation](testing.md#req-options-propagation).
+
 ### Workflow
 
 A composition pattern where a deterministic [FSM](#machine) drives execution

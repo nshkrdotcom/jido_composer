@@ -13,6 +13,11 @@ The behaviour defines a single callback:
 | ------------ | --------------------- | --------------------------------------- |
 | `generate/3` | messages, tools, opts | `{:ok, response}` or `{:error, reason}` |
 
+The `opts` keyword list carries both LLM-specific options (model, temperature,
+max_tokens) and transport options. The reserved key `:req_options` passes
+through to the underlying HTTP client — see
+[Req Options Propagation](#req-options-propagation).
+
 ### Input Types
 
 **Messages** — A list of conversation turns:
@@ -83,6 +88,43 @@ sequenceDiagram
     Strategy->>Strategy: append to messages, loop
 ```
 
+## Req Options Propagation
+
+The `opts` keyword list accepted by `generate/3` supports a `:req_options` key
+that LLM implementations merge into their Req HTTP calls. This enables
+[cassette-based testing](../testing.md#reqcassette-integration) without any
+special test-mode logic in the LLM module or strategy.
+
+| Reserved Key   | Type    | Purpose                                                        |
+| -------------- | ------- | -------------------------------------------------------------- |
+| `:req_options` | keyword | Merged into `Req.request!/1` options by the LLM implementation |
+
+Within `:req_options`, two keys are particularly relevant:
+
+| Key       | Purpose                                              | Default |
+| --------- | ---------------------------------------------------- | ------- |
+| `:plug`   | ReqCassette plug for intercepting HTTP calls         | `nil`   |
+| `:stream` | Enable/disable streaming (must be `false` for plugs) | `true`  |
+
+```mermaid
+flowchart LR
+    Strategy["Orchestrator Strategy"]
+    LLM["LLM Module<br/>(generate/3)"]
+    Req["Req.request!"]
+
+    Strategy -->|"opts[:req_options]"| LLM
+    LLM -->|"merge into Req call"| Req
+```
+
+The strategy passes `req_options` through opaquely — it never inspects or
+modifies them. This keeps the transport concern entirely within the LLM module
+and the test setup.
+
+Streaming uses the Finch adapter directly, bypassing the Req plug system.
+When `:req_options` includes a `:plug`, the LLM implementation must disable
+streaming for that request. This is typically expressed as: if `plug` is set
+in req_options, override `stream` to `false`.
+
 ## Implementation Requirements
 
 An LLM module needs to:
@@ -92,16 +134,29 @@ An LLM module needs to:
 3. Parse the provider's response into the standard response types
 4. Handle provider-specific concerns (API keys, rate limits, retries)
    internally
+5. Merge `opts[:req_options]` into outgoing Req calls when present
+6. Disable streaming when `opts[:req_options][:plug]` is set
 
 The Orchestrator strategy does not concern itself with provider details. All
 provider-specific logic lives inside the LLM module implementation.
 
 ## Testing
 
-For testing, a mock LLM module can return predetermined responses:
+LLM modules are tested primarily through
+[ReqCassette](../testing.md#reqcassette-integration) cassettes that capture
+real LLM API responses. This validates parsing, tool call extraction, and error
+handling against actual provider response formats.
+
+Cassettes are recorded once against the real API, then replayed in all
+subsequent test runs. The `plug:` and `stream: false` options are passed via
+`:req_options` to intercept HTTP calls during replay.
+
+For pure strategy logic that does not depend on response shape (e.g., verifying
+that the strategy emits the correct directive type), a minimal mock LLM module
+returns predetermined responses:
 
 - Return `{:tool_calls, [...]}` to simulate the LLM choosing specific nodes
 - Return `{:final_answer, "..."}` to simulate completion
 - Return `{:error, reason}` to simulate failures
 
-This makes Orchestrator strategies fully testable without any LLM API calls.
+See [Testing Strategy](../testing.md) for the full testing approach.

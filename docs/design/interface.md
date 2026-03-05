@@ -116,6 +116,7 @@ use Jido.Composer.Orchestrator,
   nodes:          list          — available nodes (actions, agents, other compositions)
   system_prompt:  string        — LLM system instructions
   max_iterations: integer       — ReAct loop safety limit (default: 10)
+  req_options:    keyword       — opaque Req HTTP options forwarded to LLM (default: [])
 ```
 
 ### Generated Functions
