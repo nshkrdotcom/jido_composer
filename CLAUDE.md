@@ -49,6 +49,8 @@ See `PLAN.md` for the complete design.
 
 ## Development Conventions
 
+Use `npx openspec <args>` to use openspec.
+
 ### Git Commit Conventions
 
 **ALWAYS run `mix precommit` before committing.** This must pass cleanly.
