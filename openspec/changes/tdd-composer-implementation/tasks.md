@@ -162,10 +162,10 @@
 
 > **References**: `docs/design/hitl/approval-lifecycle.md` — ApprovalRequest full 14-field table (who sets each), ApprovalResponse fields, protocol sequence diagram. `docs/design/hitl/human-node.md` — how HumanNode constructs ApprovalRequest. `prototypes/test_hitl_assumptions.exs` — serialization, approval gate tests.
 
-- [ ] 19.1 Write tests for ApprovalRequest in `test/jido/composer/hitl/approval_request_test.exs` (creation, auto-id, serialization)
-- [ ] 19.2 Write tests for ApprovalResponse in `test/jido/composer/hitl/approval_response_test.exs` (creation, validation)
-- [ ] 19.3 Implement ApprovalRequest in `lib/jido/composer/hitl/approval_request.ex`
-- [ ] 19.4 Implement ApprovalResponse in `lib/jido/composer/hitl/approval_response.ex`
+- [x] 19.1 Write tests for ApprovalRequest in `test/jido/composer/hitl/approval_request_test.exs` (creation, auto-id, serialization)
+- [x] 19.2 Write tests for ApprovalResponse in `test/jido/composer/hitl/approval_response_test.exs` (creation, validation)
+- [x] 19.3 Implement ApprovalRequest in `lib/jido/composer/hitl/approval_request.ex`
+- [x] 19.4 Implement ApprovalResponse in `lib/jido/composer/hitl/approval_response.ex`
 
 ## 20. HumanNode
 
