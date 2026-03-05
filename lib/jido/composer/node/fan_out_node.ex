@@ -18,6 +18,8 @@ defmodule Jido.Composer.Node.FanOutNode do
   - `:collect_partial` — collects all results, including `{:error, reason}` entries
   """
 
+  @behaviour Jido.Composer.Node
+
   @default_timeout 30_000
 
   @enforce_keys [:name, :branches]
@@ -64,6 +66,7 @@ defmodule Jido.Composer.Node.FanOutNode do
     end
   end
 
+  @impl true
   @spec run(t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(%__MODULE__{} = node, context, _opts \\ []) do
     results =
@@ -90,9 +93,11 @@ defmodule Jido.Composer.Node.FanOutNode do
     end
   end
 
+  @impl true
   @spec name(t()) :: String.t()
   def name(%__MODULE__{name: name}), do: name
 
+  @impl true
   @spec description(t()) :: String.t()
   def description(%__MODULE__{branches: branches}) do
     "Fan-out node with #{length(branches)} concurrent branches"

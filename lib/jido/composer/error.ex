@@ -32,6 +32,11 @@ defmodule Jido.Composer.Error do
     use Splode.ErrorClass, class: :orchestration
   end
 
+  defmodule Communication do
+    @moduledoc false
+    use Splode.ErrorClass, class: :communication
+  end
+
   defmodule Unknown do
     @moduledoc false
     use Splode.ErrorClass, class: :unknown
@@ -50,6 +55,7 @@ defmodule Jido.Composer.Error do
       invalid: Invalid,
       transition: Transition,
       execution: Execution,
+      communication: Communication,
       orchestration: Orchestration,
       unknown: Unknown
     ],
@@ -89,6 +95,14 @@ defmodule Jido.Composer.Error do
     def message(_), do: "Orchestration failed"
   end
 
+  defmodule CommunicationError do
+    @moduledoc false
+    use Splode.Error, fields: [:msg, :details], class: :communication
+
+    def message(%{msg: msg}) when is_binary(msg), do: msg
+    def message(_), do: "Communication failed"
+  end
+
   # --- Constructors ---
 
   @spec validation_error(String.t(), keyword()) :: ValidationError.t()
@@ -114,6 +128,14 @@ defmodule Jido.Composer.Error do
     ExecutionError.exception(
       msg: message,
       node: Keyword.get(opts, :node),
+      details: Keyword.get(opts, :details, %{})
+    )
+  end
+
+  @spec communication_error(String.t(), keyword()) :: CommunicationError.t()
+  def communication_error(message, opts \\ []) do
+    CommunicationError.exception(
+      msg: message,
       details: Keyword.get(opts, :details, %{})
     )
   end

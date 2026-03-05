@@ -13,6 +13,7 @@ defmodule Jido.Composer.Integration.WorkflowTest do
     FailAction,
     AccumulatorAction,
     ValidateAction,
+    ValidateOutcomeAction,
     NoopAction
   }
 
@@ -133,6 +134,28 @@ defmodule Jido.Composer.Integration.WorkflowTest do
       initial: :step
   end
 
+  defmodule CustomOutcomeWorkflow do
+    use Jido.Composer.Workflow,
+      name: "custom_outcome",
+      description: "Workflow that branches on custom outcome atoms",
+      nodes: %{
+        check: ValidateOutcomeAction,
+        process: NoopAction,
+        quarantine: NoopAction,
+        retry_step: NoopAction
+      },
+      transitions: %{
+        {:check, :ok} => :process,
+        {:check, :invalid} => :quarantine,
+        {:check, :retry} => :retry_step,
+        {:process, :ok} => :done,
+        {:quarantine, :ok} => :done,
+        {:retry_step, :ok} => :done,
+        {:_, :error} => :failed
+      },
+      initial: :check
+  end
+
   # -- Helpers --
 
   # Simulates the AgentServer directive execution loop.
@@ -162,6 +185,16 @@ defmodule Jido.Composer.Integration.WorkflowTest do
         %{
           status: :ok,
           result: result,
+          instruction: %Jido.Instruction{action: action_module, params: params},
+          effects: [],
+          meta: %{}
+        }
+
+      {:ok, result, outcome} ->
+        %{
+          status: :ok,
+          result: result,
+          outcome: outcome,
           instruction: %Jido.Instruction{action: action_module, params: params},
           effects: [],
           meta: %{}
@@ -355,6 +388,71 @@ defmodule Jido.Composer.Integration.WorkflowTest do
 
       # Multiply step: 5 * 3 = 15 (it receives the full context including value/amount)
       assert ctx[:multiply][:result] == 15.0
+    end
+  end
+
+  describe "custom outcomes" do
+    test "follows :ok path on valid data" do
+      agent = CustomOutcomeWorkflow.new()
+      {agent, directives} = CustomOutcomeWorkflow.run(agent, %{data: "valid"})
+      agent = execute_workflow(CustomOutcomeWorkflow, agent, directives)
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+
+      history_states =
+        strat.machine.history
+        |> Enum.map(fn {state, _outcome, _ts} -> state end)
+        |> Enum.reverse()
+
+      assert history_states == [:check, :process]
+    end
+
+    test "follows :invalid path on invalid data" do
+      agent = CustomOutcomeWorkflow.new()
+      {agent, directives} = CustomOutcomeWorkflow.run(agent, %{data: "invalid"})
+      agent = execute_workflow(CustomOutcomeWorkflow, agent, directives)
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+
+      history_states =
+        strat.machine.history
+        |> Enum.map(fn {state, _outcome, _ts} -> state end)
+        |> Enum.reverse()
+
+      assert history_states == [:check, :quarantine]
+    end
+
+    test "follows :retry path on retry data" do
+      agent = CustomOutcomeWorkflow.new()
+      {agent, directives} = CustomOutcomeWorkflow.run(agent, %{data: "retry"})
+      agent = execute_workflow(CustomOutcomeWorkflow, agent, directives)
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+
+      history_states =
+        strat.machine.history
+        |> Enum.map(fn {state, _outcome, _ts} -> state end)
+        |> Enum.reverse()
+
+      assert history_states == [:check, :retry_step]
+    end
+  end
+
+  describe "run_sync/2" do
+    test "blocks until workflow completes and returns result context" do
+      agent = ETLWorkflow.new()
+      assert {:ok, result} = ETLWorkflow.run_sync(agent, %{source: "test_db"})
+
+      assert result[:extract][:count] == 2
+      assert result[:load][:status] == :complete
+    end
+
+    test "returns error on workflow failure" do
+      agent = FailFirstWorkflow.new()
+      assert {:error, _reason} = FailFirstWorkflow.run_sync(agent, %{})
     end
   end
 

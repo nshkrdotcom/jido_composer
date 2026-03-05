@@ -10,6 +10,8 @@ defmodule Jido.Composer.Node.ActionNode do
   is the responsibility of the composition layer (Machine/Strategy), not the node.
   """
 
+  @behaviour Jido.Composer.Node
+
   @enforce_keys [:action_module]
   defstruct [:action_module, opts: []]
 
@@ -27,6 +29,7 @@ defmodule Jido.Composer.Node.ActionNode do
     end
   end
 
+  @impl true
   @spec run(t(), map(), keyword()) :: Jido.Composer.Node.result()
   def run(%__MODULE__{action_module: action_module}, context, opts \\ []) do
     case Jido.Exec.run(action_module, context, opts) do
@@ -35,12 +38,15 @@ defmodule Jido.Composer.Node.ActionNode do
     end
   end
 
+  @impl true
   @spec name(t()) :: String.t()
   def name(%__MODULE__{action_module: mod}), do: mod.name()
 
+  @impl true
   @spec description(t()) :: String.t()
   def description(%__MODULE__{action_module: mod}), do: mod.description()
 
+  @impl true
   @spec schema(t()) :: keyword() | nil
   def schema(%__MODULE__{action_module: mod}), do: mod.schema()
 

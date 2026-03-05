@@ -17,8 +17,10 @@ defmodule Jido.Composer.Node do
   @type outcome :: atom()
   @type result :: {:ok, context()} | {:ok, context(), outcome()} | {:error, term()}
 
-  @callback run(context :: context(), opts :: keyword()) :: result()
-  @callback name() :: String.t()
-  @callback description() :: String.t()
-  @callback schema() :: keyword() | nil
+  @callback run(node :: struct(), context :: context(), opts :: keyword()) :: result()
+  @callback name(node :: struct()) :: String.t()
+  @callback description(node :: struct()) :: String.t()
+  @callback schema(node :: struct()) :: keyword() | nil
+
+  @optional_callbacks [schema: 1]
 end

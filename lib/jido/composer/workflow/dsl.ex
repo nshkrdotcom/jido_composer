@@ -81,6 +81,69 @@ defmodule Jido.Composer.Workflow.DSL do
       def run(%Jido.Agent{} = agent, context \\ %{}) when is_map(context) do
         __MODULE__.cmd(agent, {:workflow_start, context})
       end
+
+      @doc "Runs the workflow synchronously, blocking until terminal state."
+      @spec run_sync(Jido.Agent.t(), map()) :: {:ok, map()} | {:error, term()}
+      def run_sync(%Jido.Agent{} = agent, context \\ %{}) when is_map(context) do
+        {agent, directives} = run(agent, context)
+        Jido.Composer.Workflow.DSL.__run_sync_loop__(__MODULE__, agent, directives)
+      end
+    end
+  end
+
+  @doc false
+  def __run_sync_loop__(module, agent, directives) do
+    case run_directives(module, agent, directives) do
+      {:ok, agent} ->
+        strat = Jido.Agent.Strategy.State.get(agent)
+        {:ok, strat.machine.context}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      {:suspend, agent, _directive} ->
+        strat = Jido.Agent.Strategy.State.get(agent)
+        {:error, {:suspended, strat.pending_approval}}
+    end
+  end
+
+  defp run_directives(_module, agent, []), do: check_terminal(agent)
+
+  defp run_directives(module, agent, [directive | rest]) do
+    case directive do
+      %Jido.Agent.Directive.RunInstruction{instruction: instr, result_action: result_action} ->
+        payload = execute_sync(instr)
+        {agent, new_directives} = module.cmd(agent, {result_action, payload})
+        run_directives(module, agent, new_directives ++ rest)
+
+      %Jido.Composer.Directive.SuspendForHuman{} = suspend ->
+        {:suspend, agent, suspend}
+
+      _other ->
+        run_directives(module, agent, rest)
+    end
+  end
+
+  defp execute_sync(%Jido.Instruction{action: action_module, params: params}) do
+    case Jido.Exec.run(action_module, params, %{}, timeout: 0) do
+      {:ok, result} ->
+        %{status: :ok, result: result}
+
+      {:ok, result, outcome} ->
+        %{status: :ok, result: result, outcome: outcome}
+
+      {:error, reason} ->
+        %{status: :error, reason: reason}
+    end
+  end
+
+  defp check_terminal(agent) do
+    strat = Jido.Agent.Strategy.State.get(agent)
+
+    case strat.status do
+      :success -> {:ok, agent}
+      :failure -> {:error, :workflow_failed}
+      _ -> {:ok, agent}
     end
   end
 

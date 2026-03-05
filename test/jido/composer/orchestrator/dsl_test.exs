@@ -24,6 +24,18 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
       nodes: [Jido.Composer.TestActions.AddAction]
   end
 
+  defmodule GatedOrchestrator do
+    use Jido.Composer.Orchestrator,
+      name: "gated_orchestrator",
+      description: "Orchestrator with approval-gated nodes",
+      llm: Jido.Composer.TestSupport.MockLLM,
+      nodes: [
+        Jido.Composer.TestActions.AddAction,
+        {Jido.Composer.TestActions.EchoAction, requires_approval: true}
+      ],
+      system_prompt: "You have gated tools."
+  end
+
   describe "module generation" do
     test "generates a module that can create an agent" do
       agent = SimpleOrchestrator.new()
@@ -91,6 +103,35 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
       assert [%Jido.Agent.Directive.RunInstruction{}] = directives
       assert agent.state.__strategy__.status == :awaiting_llm
       assert agent.state.__strategy__.query == "Hello"
+    end
+  end
+
+  describe "query_sync/3" do
+    test "blocks until orchestrator produces final answer" do
+      MockLLM.setup([{:final_answer, "The answer is 42"}])
+      agent = SimpleOrchestrator.new()
+
+      assert {:ok, "The answer is 42"} = SimpleOrchestrator.query_sync(agent, "What is 42?")
+    end
+
+    test "returns error on LLM failure" do
+      MockLLM.setup([{:error, "API down"}])
+      agent = SimpleOrchestrator.new()
+
+      assert {:error, _reason} = SimpleOrchestrator.query_sync(agent, "Fail")
+    end
+  end
+
+  describe "gated_nodes via DSL" do
+    test "requires_approval metadata is passed through to strategy opts" do
+      opts = GatedOrchestrator.strategy_opts()
+      assert is_list(opts[:gated_nodes])
+      assert "echo" in opts[:gated_nodes]
+    end
+
+    test "non-gated nodes are not in gated_nodes list" do
+      opts = GatedOrchestrator.strategy_opts()
+      refute "add" in opts[:gated_nodes]
     end
   end
 end

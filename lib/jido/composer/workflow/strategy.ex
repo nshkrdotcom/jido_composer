@@ -66,9 +66,10 @@ defmodule Jido.Composer.Workflow.Strategy do
 
     case params do
       %{status: :ok, result: result} ->
+        outcome = Map.get(params, :outcome, :ok)
         machine = Machine.apply_result(strat.machine, result)
 
-        case Machine.transition(machine, :ok) do
+        case Machine.transition(machine, outcome) do
           {:ok, machine} ->
             agent = put_machine(agent, machine)
             handle_after_transition(agent)
@@ -228,13 +229,28 @@ defmodule Jido.Composer.Workflow.Strategy do
     strat = StratState.get(agent, %{})
     status = Map.get(strat, :status, :idle)
 
+    details = %{
+      state: get_in(strat, [:machine, Access.key(:status)])
+    }
+
+    details =
+      case Map.get(strat, :pending_approval) do
+        %ApprovalRequest{} = request ->
+          Map.merge(details, %{
+            reason: :awaiting_approval,
+            request_id: request.id,
+            node_name: request.node_name
+          })
+
+        _ ->
+          details
+      end
+
     %Jido.Agent.Strategy.Snapshot{
       status: status,
       done?: status in [:success, :failure],
       result: get_in(strat, [:machine, Access.key(:context)]),
-      details: %{
-        state: get_in(strat, [:machine, Access.key(:status)])
-      }
+      details: details
     }
   end
 

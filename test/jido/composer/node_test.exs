@@ -6,85 +6,95 @@ defmodule Jido.Composer.NodeTest do
   defmodule ValidNode do
     @behaviour Node
 
-    @impl Node
-    def run(context, _opts), do: {:ok, Map.put(context, :ran, true)}
+    defstruct []
 
     @impl Node
-    def name, do: "valid_node"
+    def run(_node, context, _opts), do: {:ok, Map.put(context, :ran, true)}
 
     @impl Node
-    def description, do: "A test node"
+    def name(_node), do: "valid_node"
 
     @impl Node
-    def schema, do: [input: [type: :string, required: true]]
+    def description(_node), do: "A test node"
+
+    @impl Node
+    def schema(_node), do: [input: [type: :string, required: true]]
   end
 
   defmodule OutcomeNode do
     @behaviour Node
 
-    @impl Node
-    def run(context, _opts), do: {:ok, context, :custom_outcome}
+    defstruct []
 
     @impl Node
-    def name, do: "outcome_node"
+    def run(_node, context, _opts), do: {:ok, context, :custom_outcome}
 
     @impl Node
-    def description, do: "Returns explicit outcome"
+    def name(_node), do: "outcome_node"
 
     @impl Node
-    def schema, do: nil
+    def description(_node), do: "Returns explicit outcome"
+
+    @impl Node
+    def schema(_node), do: nil
   end
 
   defmodule ErrorNode do
     @behaviour Node
 
-    @impl Node
-    def run(_context, _opts), do: {:error, "something went wrong"}
+    defstruct []
 
     @impl Node
-    def name, do: "error_node"
+    def run(_node, _context, _opts), do: {:error, "something went wrong"}
 
     @impl Node
-    def description, do: "Always errors"
+    def name(_node), do: "error_node"
 
     @impl Node
-    def schema, do: nil
+    def description(_node), do: "Always errors"
+
+    @impl Node
+    def schema(_node), do: nil
   end
 
   describe "behaviour contract" do
     test "module implementing Node can return {:ok, context}" do
-      assert {:ok, %{ran: true}} = ValidNode.run(%{}, [])
+      assert {:ok, %{ran: true}} = ValidNode.run(%ValidNode{}, %{}, [])
     end
 
     test "module implementing Node can return {:ok, context, outcome}" do
-      assert {:ok, %{}, :custom_outcome} = OutcomeNode.run(%{}, [])
+      assert {:ok, %{}, :custom_outcome} = OutcomeNode.run(%OutcomeNode{}, %{}, [])
     end
 
     test "module implementing Node can return {:error, reason}" do
-      assert {:error, "something went wrong"} = ErrorNode.run(%{}, [])
+      assert {:error, "something went wrong"} = ErrorNode.run(%ErrorNode{}, %{}, [])
     end
 
-    test "name/0 returns a string" do
-      assert is_binary(ValidNode.name())
+    test "name/1 returns a string" do
+      assert is_binary(ValidNode.name(%ValidNode{}))
     end
 
-    test "description/0 returns a string" do
-      assert is_binary(ValidNode.description())
+    test "description/1 returns a string" do
+      assert is_binary(ValidNode.description(%ValidNode{}))
     end
 
-    test "schema/0 returns keyword list or nil" do
-      assert is_list(ValidNode.schema())
-      assert is_nil(OutcomeNode.schema())
+    test "schema/1 returns keyword list or nil" do
+      assert is_list(ValidNode.schema(%ValidNode{}))
+      assert is_nil(OutcomeNode.schema(%OutcomeNode{}))
     end
   end
 
   describe "compiler enforcement" do
     test "behaviour defines all required callbacks" do
       callbacks = Node.behaviour_info(:callbacks)
-      assert {:run, 2} in callbacks
-      assert {:name, 0} in callbacks
-      assert {:description, 0} in callbacks
-      assert {:schema, 0} in callbacks
+      assert {:run, 3} in callbacks
+      assert {:name, 1} in callbacks
+      assert {:description, 1} in callbacks
+    end
+
+    test "schema is optional" do
+      optional = Node.behaviour_info(:optional_callbacks)
+      assert {:schema, 1} in optional
     end
   end
 end

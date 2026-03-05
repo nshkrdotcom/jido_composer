@@ -64,6 +64,20 @@ defmodule Jido.Composer.ErrorTest do
     end
   end
 
+  describe "communication_error/2" do
+    test "creates a communication error" do
+      error = Error.communication_error("signal delivery failed", details: %{timeout: 5000})
+      assert %Error.CommunicationError{} = error
+      assert Exception.message(error) =~ "signal delivery failed"
+      assert error.details == %{timeout: 5000}
+    end
+
+    test "has :communication error class" do
+      error = Error.communication_error("test")
+      assert error.class == :communication
+    end
+  end
+
   describe "Splode integration" do
     test "errors are Splode-compatible exceptions" do
       error = Error.validation_error("test")

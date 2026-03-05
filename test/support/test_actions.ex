@@ -168,4 +168,30 @@ defmodule Jido.Composer.TestActions do
       {:ok, %{tag: tag}}
     end
   end
+
+  defmodule ValidateOutcomeAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "validate_outcome",
+      description: "Returns custom outcome based on data validity",
+      schema: [
+        data: [type: :string, required: true, doc: "Data to validate"]
+      ]
+
+    def run(%{data: "valid"}, _context) do
+      {:ok, %{validated: true, quality: :good}}
+    end
+
+    def run(%{data: "invalid"}, _context) do
+      {:ok, %{validated: false, quality: :bad}, :invalid}
+    end
+
+    def run(%{data: "retry"}, _context) do
+      {:ok, %{validated: false, quality: :unstable}, :retry}
+    end
+
+    def run(%{data: _}, _context) do
+      {:error, "unrecognized data"}
+    end
+  end
 end

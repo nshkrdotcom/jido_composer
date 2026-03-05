@@ -532,12 +532,6 @@ defmodule Jido.Composer.Orchestrator.Strategy do
   end
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do
-    Map.merge(left, right, fn
-      _key, left_val, right_val when is_map(left_val) and is_map(right_val) ->
-        deep_merge(left_val, right_val)
-
-      _key, _left_val, right_val ->
-        right_val
-    end)
+    DeepMerge.deep_merge(left, right)
   end
 end

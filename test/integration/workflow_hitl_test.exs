@@ -248,6 +248,23 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
     end
   end
 
+  describe "snapshot during HITL pause" do
+    test "snapshot includes HITL-specific details when waiting for approval" do
+      agent = ApprovalWorkflow.new()
+      {agent, directives} = ApprovalWorkflow.run(agent, %{tag: "deploy-v1"})
+      {agent, _remaining} = execute_workflow(ApprovalWorkflow, agent, directives)
+
+      ctx = %{agent_module: ApprovalWorkflow, strategy_opts: ApprovalWorkflow.strategy_opts()}
+      snap = Jido.Composer.Workflow.Strategy.snapshot(agent, ctx)
+
+      assert snap.status == :waiting
+      refute snap.done?
+      assert snap.details.reason == :awaiting_approval
+      assert is_binary(snap.details.request_id)
+      assert snap.details.node_name == "deploy_approval"
+    end
+  end
+
   describe "timeout outcome transition" do
     test "timeout transitions to fallback state" do
       agent = TimeoutWorkflow.new()

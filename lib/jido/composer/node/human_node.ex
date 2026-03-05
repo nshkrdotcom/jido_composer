@@ -11,6 +11,8 @@ defmodule Jido.Composer.Node.HumanNode do
   directive.
   """
 
+  @behaviour Jido.Composer.Node
+
   alias Jido.Composer.HITL.ApprovalRequest
 
   @enforce_keys [:name, :description, :prompt]
@@ -60,6 +62,7 @@ defmodule Jido.Composer.Node.HumanNode do
     end
   end
 
+  @impl true
   @spec run(t(), map(), keyword()) :: {:ok, map(), :suspend}
   def run(%__MODULE__{} = node, context, _opts \\ []) do
     prompt = evaluate_prompt(node.prompt, context)
@@ -80,12 +83,15 @@ defmodule Jido.Composer.Node.HumanNode do
     {:ok, updated_context, :suspend}
   end
 
+  @impl true
   @spec name(t()) :: String.t()
   def name(%__MODULE__{name: name}), do: name
 
+  @impl true
   @spec description(t()) :: String.t()
   def description(%__MODULE__{description: desc}), do: desc
 
+  @impl true
   @spec schema(t()) :: keyword() | nil
   def schema(%__MODULE__{response_schema: schema}), do: schema
 

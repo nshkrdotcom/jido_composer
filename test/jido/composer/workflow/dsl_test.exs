@@ -61,5 +61,38 @@ defmodule Jido.Composer.Workflow.DSLTest do
       assert [%Jido.Agent.Directive.RunInstruction{}] = directives
       assert agent.state.__strategy__.machine.status == :extract
     end
+
+    test "run_sync/2 blocks until terminal state and returns result" do
+      agent = SimpleWorkflow.new()
+      assert {:ok, result} = SimpleWorkflow.run_sync(agent, %{value: 1.0, amount: 2.0})
+      assert is_map(result)
+      assert result[:extract][:result] == 3.0
+    end
+  end
+
+  describe "compile-time validation" do
+    test "rejects initial state not in nodes" do
+      assert_raise CompileError, fn ->
+        defmodule BadInitialWorkflow do
+          use Jido.Composer.Workflow,
+            name: "bad_initial",
+            nodes: %{step: AddAction},
+            transitions: %{{:step, :ok} => :done},
+            initial: :nonexistent
+        end
+      end
+    end
+
+    test "rejects transition targets not in nodes or terminal states" do
+      assert_raise CompileError, fn ->
+        defmodule BadTransitionWorkflow do
+          use Jido.Composer.Workflow,
+            name: "bad_transition",
+            nodes: %{step: AddAction},
+            transitions: %{{:step, :ok} => :nonexistent},
+            initial: :step
+        end
+      end
+    end
   end
 end
