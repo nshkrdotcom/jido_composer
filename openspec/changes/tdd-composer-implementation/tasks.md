@@ -119,8 +119,8 @@
 
 > **References**: `docs/design/nodes/README.md` — AgentNode section: struct fields, three modes table, sync mode 5-step flow. `docs/design/workflow/strategy.md` — "Execution Flow: AgentNode" sequence diagram. `docs/design/composition.md` — communication across boundaries. `PLAN.md` Step 4. `prototypes/learnings.md` — "SpawnAgent Lifecycle", "on_parent_death Behavior", "Module Type Detection". `prototypes/test_agent_server_children.exs` — 6 lifecycle tests.
 
-- [ ] 14.1 Write tests for AgentNode in `test/jido/composer/node/agent_node_test.exs` (struct construction, mode validation, metadata delegation, timeout defaults)
-- [ ] 14.2 Implement `Jido.Composer.Node.AgentNode` in `lib/jido/composer/node/agent_node.ex`
+- [x] 14.1 Write tests for AgentNode in `test/jido/composer/node/agent_node_test.exs` (struct construction, mode validation, metadata delegation, timeout defaults)
+- [x] 14.2 Implement `Jido.Composer.Node.AgentNode` in `lib/jido/composer/node/agent_node.ex`
 
 ## 15. FanOutNode
 
