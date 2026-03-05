@@ -171,8 +171,8 @@
 
 > **References**: `docs/design/hitl/human-node.md` — HumanNode struct fields, run/2 contract (`{:ok, ctx, :suspend}`), prompt evaluation, context filtering. `docs/design/hitl/README.md` — "Humans Are Nodes" principle. `docs/design/nodes/README.md` — HumanNode in Node type hierarchy. `prototypes/test_hitl_assumptions.exs` — suspend/resume, rejection tests.
 
-- [ ] 20.1 Write tests for HumanNode in `test/jido/composer/node/human_node_test.exs` (suspend outcome, static/dynamic prompt, context filtering)
-- [ ] 20.2 Implement `Jido.Composer.Node.HumanNode` in `lib/jido/composer/node/human_node.ex`
+- [x] 20.1 Write tests for HumanNode in `test/jido/composer/node/human_node_test.exs` (suspend outcome, static/dynamic prompt, context filtering)
+- [x] 20.2 Implement `Jido.Composer.Node.HumanNode` in `lib/jido/composer/node/human_node.ex`
 
 ## 21. SuspendForHuman Directive
 
