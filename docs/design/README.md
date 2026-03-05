@@ -35,8 +35,8 @@ shared by all participants.
   - [Strategy](workflow/strategy.md) — Workflow strategy lifecycle and directive
     flow
 - [Orchestrator](orchestrator/README.md) — LLM-driven dynamic composition
-  - [LLM Integration](orchestrator/llm-behaviour.md) — req_llm facade and
-    custom LLM modules
+  - [LLM Integration](orchestrator/llm-integration.md) — LLMAction calling
+    ReqLLM directly, generation modes, and parameter flow
   - [Strategy](orchestrator/strategy.md) — Orchestrator strategy lifecycle and
     ReAct loop
 - [Human-in-the-Loop](hitl/README.md) — Human decision gates, approval

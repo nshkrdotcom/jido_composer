@@ -8,21 +8,25 @@ invocations, tool execution, and result accumulation.
 
 The strategy stores its state under `agent.state.__strategy__`:
 
-| Field                | Type                        | Purpose                                                             |
-| -------------------- | --------------------------- | ------------------------------------------------------------------- |
-| `status`             | atom                        | `:idle`, `:awaiting_llm`, `:awaiting_tools`, `:completed`, `:error` |
-| `nodes`              | `%{String.t() => Node.t()}` | Available nodes indexed by name                                     |
-| `llm_module`         | module                      | LLM facade module (default: `Jido.Composer.Orchestrator.LLM`)       |
-| `model`              | `String.t()`                | req_llm model spec (e.g. `"anthropic:claude-sonnet-4-20250514"`)    |
-| `system_prompt`      | `String.t()`                | System instructions for the LLM                                     |
-| `conversation`       | `ReqLLM.Context.t()`        | Conversation history managed by req_llm                             |
-| `tools`              | `[ReqLLM.Tool.t()]`         | Tool descriptions as `ReqLLM.Tool` structs derived from nodes       |
-| `pending_tool_calls` | `[tool_call]`               | In-flight tool executions                                           |
-| `context`            | map                         | Accumulated [context](../nodes/context-flow.md)                     |
-| `iteration`          | integer                     | Current loop iteration                                              |
-| `max_iterations`     | integer                     | Safety limit                                                        |
-| `req_options`        | keyword                     | Opaque HTTP options forwarded to [LLM generate/4](llm-behaviour.md) |
-| `result`             | any                         | Final answer when complete                                          |
+| Field                | Type                        | Purpose                                                                |
+| -------------------- | --------------------------- | ---------------------------------------------------------------------- |
+| `status`             | atom                        | `:idle`, `:awaiting_llm`, `:awaiting_tools`, `:completed`, `:error`    |
+| `nodes`              | `%{String.t() => Node.t()}` | Available nodes indexed by name                                        |
+| `model`              | `String.t()`                | req_llm model spec (e.g. `"anthropic:claude-sonnet-4-20250514"`)       |
+| `system_prompt`      | `String.t()`                | System instructions for the LLM                                        |
+| `temperature`        | `float \| nil`              | Sampling temperature                                                   |
+| `max_tokens`         | `integer \| nil`            | Maximum tokens in response                                             |
+| `generation_mode`    | atom                        | `:generate_text`, `:generate_object`, `:stream_text`, `:stream_object` |
+| `output_schema`      | `map \| nil`                | JSON Schema for object generation modes                                |
+| `llm_opts`           | keyword                     | Additional options passed through to req_llm                           |
+| `conversation`       | `ReqLLM.Context.t()`        | Conversation history managed by req_llm                                |
+| `tools`              | `[ReqLLM.Tool.t()]`         | Tool descriptions as `ReqLLM.Tool` structs derived from nodes          |
+| `pending_tool_calls` | `[tool_call]`               | In-flight tool executions                                              |
+| `context`            | map                         | Accumulated [context](../nodes/context-flow.md)                        |
+| `iteration`          | integer                     | Current loop iteration                                                 |
+| `max_iterations`     | integer                     | Safety limit                                                           |
+| `req_options`        | keyword                     | Opaque HTTP options forwarded to [LLMAction](llm-integration.md)       |
+| `result`             | any                         | Final answer when complete                                             |
 
 ## Status Lifecycle
 
@@ -104,23 +108,27 @@ sequenceDiagram
 
 ## LLM Execution via Directives
 
-The strategy never calls the LLM module directly. Instead, it wraps the LLM
-call in an internal action and emits a RunInstruction directive. This action:
+The strategy never calls ReqLLM directly. Instead, it builds a
+`Jido.Instruction` targeting `LLMAction` and emits a RunInstruction directive.
+The instruction params contain all LLM-related state as flat keys:
+`conversation`, `tool_results`, `tools`, `model`, `query`, `system_prompt`,
+`temperature`, `max_tokens`, `generation_mode`, `output_schema`, `llm_opts`,
+and `req_options`.
 
-1. Calls `llm_module.generate(conversation, tool_results, tools, opts)`
-2. Returns the `{response, updated_conversation}` as an instruction result
+LLMAction calls the appropriate ReqLLM function based on `generation_mode` and
+returns `{response, updated_conversation}` as an instruction result. The result
+is routed back to `cmd/3` as `:orchestrator_llm_result`. This keeps the strategy
+pure and testable. The strategy stores the updated `ReqLLM.Context` in its state
+for the next LLM call. It never inspects the conversation's internal structure
+-- req_llm owns the message format. See
+[LLM Integration — Conversation State](llm-integration.md#conversation-state).
 
-The result is routed back to `cmd/3` as `:orchestrator_llm_result`. This keeps
-the strategy pure and testable. The strategy stores the updated
-`ReqLLM.Context` in its state for the next LLM call. It never inspects the
-conversation's internal structure — req_llm owns the message format. See
-[LLM Integration — Conversation State](llm-behaviour.md#conversation-state).
-
-The `opts` passed to `generate/4` include any `:req_options` from the
-strategy configuration. This enables [cassette-based testing](../testing.md)
-by injecting a plug that intercepts HTTP calls. The strategy treats
-`req_options` as opaque — it passes them through without inspection. See
-[LLM Integration — Req Options](llm-behaviour.md#req-options).
+The `req_options` from strategy state are included in the instruction params.
+LLMAction maps them to req_llm's `req_http_options` key, enabling
+[cassette-based testing](../testing.md) by injecting a plug that intercepts
+HTTP calls. The strategy treats `req_options` as opaque -- it passes them
+through without inspection. See
+[LLM Integration — Req Options](llm-integration.md#req-options).
 
 ## Tool Execution
 
@@ -136,8 +144,9 @@ When the LLM returns tool calls:
   Results flow back as `:orchestrator_child_result`.
 
 In both cases, results are collected as normalized `tool_result` structs
-(`%{id, name, result}`) and passed to the next `generate/4` call. The LLM
-module converts them to provider-specific message formats internally.
+(`%{id, name, result}`) and passed to the next LLMAction call via
+`emit_llm_call/1`. LLMAction converts them to provider-specific message
+formats internally via `ReqLLM.Context.tool_result/3`.
 
 ## Iteration Safety
 

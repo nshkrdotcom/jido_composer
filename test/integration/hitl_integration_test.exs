@@ -7,7 +7,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
   alias Jido.Composer.HITL.{ApprovalResponse, ChildRef}
   alias Jido.Composer.Node.HumanNode
   alias Jido.Composer.Orchestrator.Strategy, as: OrchStrategy
-  alias Jido.Composer.TestSupport.MockLLM
+  alias Jido.Composer.TestSupport.LLMStub
 
   alias Jido.Composer.TestActions.{
     NoopAction,
@@ -283,8 +283,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
     test "orchestrator with gated tool can be checkpointed and resumed" do
       strategy_opts = [
         nodes: [AddAction, EchoAction],
-        llm_module: MockLLM,
-        model: "mock:test-model",
+        model: "stub:test-model",
         system_prompt: "Test",
         max_iterations: 10,
         gated_nodes: ["add"]
@@ -294,7 +293,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
       {agent, _} = OrchStrategy.init(agent, %{strategy_opts: strategy_opts})
 
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
-      MockLLM.setup([{:tool_calls, [tool_call]}, {:final_answer, "8.0"}])
+      LLMStub.setup([{:tool_calls, [tool_call]}, {:final_answer, "8.0"}])
 
       {agent, directives} =
         OrchStrategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add 5+3"})], %{})
@@ -316,8 +315,8 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
       [{request_id, _}] = Map.to_list(restored.gated_calls)
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
 
-      # Need MockLLM setup for the final answer after tool execution
-      MockLLM.setup([{:final_answer, "8.0"}])
+      # Need LLMStub setup for the final answer after tool execution
+      LLMStub.setup([{:final_answer, "8.0"}])
 
       {resumed_agent, directives} =
         OrchStrategy.cmd(
@@ -376,17 +375,11 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
   end
 
   defp execute_llm(%Jido.Instruction{params: params}) do
-    llm_module = params[:llm_module]
-    conversation = params[:conversation]
-    tool_results = params[:tool_results] || []
-    tools = params[:tools] || []
-    opts = params[:opts] || []
-
-    case llm_module.generate(conversation, tool_results, tools, opts) do
-      {:ok, response, updated_conversation} ->
+    case LLMStub.execute(params) do
+      {:ok, %{response: response, conversation: conversation}} ->
         %{
           status: :ok,
-          result: %{response: response, conversation: updated_conversation},
+          result: %{response: response, conversation: conversation},
           meta: %{}
         }
 

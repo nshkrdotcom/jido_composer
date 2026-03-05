@@ -3,7 +3,7 @@ defmodule Jido.Composer.Integration.CompositionTest do
 
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
-  alias Jido.Composer.TestSupport.MockLLM
+  alias Jido.Composer.TestSupport.LLMStub
 
   alias Jido.Composer.TestActions.{ExtractAction, TransformAction, LoadAction}
 
@@ -33,7 +33,6 @@ defmodule Jido.Composer.Integration.CompositionTest do
     use Jido.Composer.Orchestrator,
       name: "workflow_orchestrator",
       description: "Orchestrator that can invoke workflows as tools",
-      llm: Jido.Composer.TestSupport.MockLLM,
       nodes: [
         Jido.Composer.TestActions.EchoAction,
         Jido.Composer.Integration.CompositionTest.ETLWorkflow
@@ -46,7 +45,6 @@ defmodule Jido.Composer.Integration.CompositionTest do
   defmodule SimpleOrchestrator do
     use Jido.Composer.Orchestrator,
       name: "simple_orchestrator",
-      llm: Jido.Composer.TestSupport.MockLLM,
       nodes: [
         Jido.Composer.TestActions.AddAction,
         Jido.Composer.TestActions.EchoAction
@@ -146,18 +144,11 @@ defmodule Jido.Composer.Integration.CompositionTest do
          %Jido.Instruction{action: Jido.Composer.Orchestrator.LLMAction} = instr,
          _meta
        ) do
-    params = instr.params
-    llm_module = params[:llm_module]
-    conversation = params[:conversation]
-    tool_results = params[:tool_results] || []
-    tools = params[:tools] || []
-    opts = params[:opts] || []
-
-    case llm_module.generate(conversation, tool_results, tools, opts) do
-      {:ok, response, updated_conversation} ->
+    case LLMStub.execute(instr.params) do
+      {:ok, %{response: response, conversation: conversation}} ->
         %{
           status: :ok,
-          result: %{response: response, conversation: updated_conversation},
+          result: %{response: response, conversation: conversation},
           meta: %{}
         }
 
@@ -189,7 +180,7 @@ defmodule Jido.Composer.Integration.CompositionTest do
     end
 
     test "orchestrator invokes workflow tool and gets result" do
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls,
          [
            %{
@@ -214,7 +205,7 @@ defmodule Jido.Composer.Integration.CompositionTest do
     end
 
     test "orchestrator mixes action tools and workflow tools" do
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls,
          [
            %{id: "call_1", name: "echo", arguments: %{"message" => "starting ETL"}}
@@ -243,7 +234,7 @@ defmodule Jido.Composer.Integration.CompositionTest do
 
   describe "three-level nesting (orchestrator -> workflow -> action)" do
     test "full three-level nesting with workflow results flowing back" do
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls,
          [
            %{

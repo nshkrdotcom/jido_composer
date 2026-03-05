@@ -102,13 +102,15 @@ A work order that wraps an [Action](#action) with parameters, context, and
 runtime options. Instructions are the unit of execution passed to
 RunInstruction directives. Defined in `Jido.Instruction`.
 
-### LLM Facade
+### LLM Integration (LLMAction)
 
-A concrete module (`Jido.Composer.Orchestrator.LLM`) that wraps
-[req_llm](https://hexdocs.pm/req_llm) for provider-agnostic LLM calls. Exposes
-`generate/4` for the [Orchestrator](#orchestrator) strategy. Users can supply
-custom modules with the same signature — no `@behaviour` enforcement. See
-[LLM Integration](orchestrator/llm-behaviour.md).
+An internal Jido Action (`Jido.Composer.Orchestrator.LLMAction`) that calls
+[req_llm](https://hexdocs.pm/req_llm) directly for provider-agnostic LLM
+generation. Supports four modes: `generate_text`, `generate_object`,
+`stream_text`, `stream_object`. The [Orchestrator](#orchestrator) strategy
+wraps LLMAction in a RunInstruction directive -- it never calls ReqLLM directly.
+There is no facade module and no `@behaviour` enforcement. See
+[LLM Integration](orchestrator/llm-integration.md).
 
 ### Machine
 
@@ -125,9 +127,9 @@ See [Nodes](nodes/README.md).
 
 ### Orchestrator
 
-A composition pattern where an [LLM](#llm-facade) dynamically selects and
-invokes available [Nodes](#node) at runtime using a ReAct-style loop. See
-[Orchestrator](orchestrator/README.md).
+A composition pattern where an [LLM](#llm-integration-llmaction) dynamically
+selects and invokes available [Nodes](#node) at runtime using a ReAct-style
+loop. See [Orchestrator](orchestrator/README.md).
 
 ### Outcome
 
@@ -206,8 +208,8 @@ preferred test data source over mocks. See [Testing Strategy](testing.md).
 
 ### Req Options
 
-A keyword list passed through the [LLM Facade](#llm-facade) `opts`
-under the `:req_options` key. The facade maps this to req_llm's
+A keyword list passed through [LLMAction](#llm-integration-llmaction) params
+under the `:req_options` key. LLMAction maps this to req_llm's
 `:req_http_options`, which passes options through to the underlying Req HTTP
 calls. Used to inject the [Cassette](#cassette) plug for testing. See
 [Req Options Propagation](testing.md#req-options-propagation).

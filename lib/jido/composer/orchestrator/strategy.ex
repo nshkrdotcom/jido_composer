@@ -36,9 +36,13 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         module: __MODULE__,
         status: :idle,
         nodes: nodes,
-        llm_module: opts[:llm_module],
         model: opts[:model],
         system_prompt: opts[:system_prompt],
+        temperature: opts[:temperature],
+        max_tokens: opts[:max_tokens],
+        generation_mode: opts[:generation_mode] || :generate_text,
+        output_schema: opts[:output_schema],
+        llm_opts: opts[:llm_opts] || [],
         conversation: nil,
         tools: tools,
         pending_tool_calls: [],
@@ -431,16 +435,18 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     instruction = %Jido.Instruction{
       action: Jido.Composer.Orchestrator.LLMAction,
       params: %{
-        llm_module: state.llm_module,
         conversation: state.conversation,
         tool_results: state.completed_tool_results,
         tools: state.tools,
-        opts: [
-          model: state.model,
-          query: state.query,
-          system_prompt: state.system_prompt,
-          req_options: state.req_options
-        ]
+        model: state.model,
+        query: state.query,
+        system_prompt: state.system_prompt,
+        temperature: state.temperature,
+        max_tokens: state.max_tokens,
+        generation_mode: state.generation_mode,
+        output_schema: state.output_schema,
+        llm_opts: state.llm_opts,
+        req_options: state.req_options
       }
     }
 

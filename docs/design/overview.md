@@ -22,7 +22,7 @@ graph TB
         Machine["Machine (FSM)"]
         WDSL["Workflow DSL"]
         ORC["Orchestrator Strategy"]
-        LLM["LLM Facade<br/>(req_llm)"]
+        LLM["LLMAction<br/>(calls ReqLLM directly)"]
         AT["AgentTool"]
         ODSL["Orchestrator DSL"]
         Err["Error"]
@@ -77,23 +77,23 @@ but establishes the module hierarchy and exposes library-level documentation.
 
 All user-facing modules live under this namespace:
 
-| Module                                 | Purpose                                                          |
-| -------------------------------------- | ---------------------------------------------------------------- |
-| `Jido.Composer.Node`                   | [Node](nodes/README.md) behaviour definition                     |
-| `Jido.Composer.Node.ActionNode`        | [Action adapter](nodes/README.md#actionnode)                     |
-| `Jido.Composer.Node.AgentNode`         | [Agent adapter](nodes/README.md#agentnode)                       |
-| `Jido.Composer.Node.HumanNode`         | [Human decision gate](hitl/human-node.md)                        |
-| `Jido.Composer.Node.FanOutNode`        | [Parallel branch execution](nodes/README.md#fanoutnode)          |
-| `Jido.Composer.HITL.ApprovalRequest`   | [Pending human decision](hitl/approval-lifecycle.md)             |
-| `Jido.Composer.HITL.ApprovalResponse`  | [Human decision response](hitl/approval-lifecycle.md)            |
-| `Jido.Composer.Workflow`               | [Workflow DSL](workflow/README.md) macro                         |
-| `Jido.Composer.Workflow.Strategy`      | [Workflow strategy](workflow/strategy.md)                        |
-| `Jido.Composer.Workflow.Machine`       | [FSM data structure](workflow/state-machine.md)                  |
-| `Jido.Composer.Orchestrator`           | [Orchestrator DSL](orchestrator/README.md) macro                 |
-| `Jido.Composer.Orchestrator.Strategy`  | [Orchestrator strategy](orchestrator/strategy.md)                |
-| `Jido.Composer.Orchestrator.LLM`       | [LLM facade](orchestrator/llm-behaviour.md) wrapping req_llm     |
-| `Jido.Composer.Orchestrator.AgentTool` | [Node-to-tool adapter](orchestrator/README.md#agenttool-adapter) |
-| `Jido.Composer.Error`                  | [Structured errors](#error-handling)                             |
+| Module                                 | Purpose                                                                    |
+| -------------------------------------- | -------------------------------------------------------------------------- |
+| `Jido.Composer.Node`                   | [Node](nodes/README.md) behaviour definition                               |
+| `Jido.Composer.Node.ActionNode`        | [Action adapter](nodes/README.md#actionnode)                               |
+| `Jido.Composer.Node.AgentNode`         | [Agent adapter](nodes/README.md#agentnode)                                 |
+| `Jido.Composer.Node.HumanNode`         | [Human decision gate](hitl/human-node.md)                                  |
+| `Jido.Composer.Node.FanOutNode`        | [Parallel branch execution](nodes/README.md#fanoutnode)                    |
+| `Jido.Composer.HITL.ApprovalRequest`   | [Pending human decision](hitl/approval-lifecycle.md)                       |
+| `Jido.Composer.HITL.ApprovalResponse`  | [Human decision response](hitl/approval-lifecycle.md)                      |
+| `Jido.Composer.Workflow`               | [Workflow DSL](workflow/README.md) macro                                   |
+| `Jido.Composer.Workflow.Strategy`      | [Workflow strategy](workflow/strategy.md)                                  |
+| `Jido.Composer.Workflow.Machine`       | [FSM data structure](workflow/state-machine.md)                            |
+| `Jido.Composer.Orchestrator`           | [Orchestrator DSL](orchestrator/README.md) macro                           |
+| `Jido.Composer.Orchestrator.Strategy`  | [Orchestrator strategy](orchestrator/strategy.md)                          |
+| `Jido.Composer.Orchestrator.LLMAction` | [LLM integration](orchestrator/llm-integration.md) calling ReqLLM directly |
+| `Jido.Composer.Orchestrator.AgentTool` | [Node-to-tool adapter](orchestrator/README.md#agenttool-adapter)           |
+| `Jido.Composer.Error`                  | [Structured errors](#error-handling)                                       |
 
 ## Design Principles
 
@@ -251,7 +251,7 @@ See [Glossary — Error](glossary.md#error) for the term definition.
 | `jido_signal`    | Signal creation, routing, and dispatch for inter-agent communication                                                                                                                                                                  |
 | `zoi`            | Schema validation for node schemas and DSL configuration                                                                                                                                                                              |
 | `splode`         | Structured [error types](#error-handling) with error classes and consistent formatting                                                                                                                                                |
-| `req_llm`        | Provider-agnostic LLM calls via Req — [LLM facade](orchestrator/llm-behaviour.md) wraps `ReqLLM.generate_text/3`. Provides `ReqLLM.Tool`, `ReqLLM.Context`, and `ReqLLM.Response` types                                               |
+| `req_llm`        | Provider-agnostic LLM calls via Req -- [LLMAction](orchestrator/llm-integration.md) calls ReqLLM functions directly. Provides `ReqLLM.Tool`, `ReqLLM.Context`, and `ReqLLM.Response` types                                            |
 | `deep_merge`     | [Context accumulation](nodes/context-flow.md) — the monoidal merge operation for composing node results                                                                                                                               |
 | `jason`          | JSON serialization for [AgentTool](orchestrator/README.md#agenttool-adapter) parameter schemas                                                                                                                                        |
 | `nimble_options` | Legacy schema format support for node parameter definitions                                                                                                                                                                           |

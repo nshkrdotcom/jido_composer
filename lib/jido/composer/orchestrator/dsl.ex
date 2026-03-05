@@ -21,11 +21,15 @@ defmodule Jido.Composer.Orchestrator.DSL do
     name = Keyword.fetch!(opts, :name)
     description = Keyword.get(opts, :description, "Orchestrator: #{name}")
     schema = Keyword.get(opts, :schema, [])
-    llm = Keyword.get(opts, :llm, Jido.Composer.Orchestrator.LLM)
     model = Keyword.get(opts, :model, nil)
     nodes_ast = Keyword.fetch!(opts, :nodes)
     system_prompt = Keyword.get(opts, :system_prompt, nil)
     max_iterations = Keyword.get(opts, :max_iterations, 10)
+    temperature = Keyword.get(opts, :temperature, nil)
+    max_tokens = Keyword.get(opts, :max_tokens, nil)
+    generation_mode = Keyword.get(opts, :generation_mode, :generate_text)
+    output_schema = Keyword.get(opts, :output_schema, nil)
+    llm_opts = Keyword.get(opts, :llm_opts, [])
     req_options = Keyword.get(opts, :req_options, [])
     rejection_policy = Keyword.get(opts, :rejection_policy)
 
@@ -42,10 +46,14 @@ defmodule Jido.Composer.Orchestrator.DSL do
 
       @__orch_strategy_opts__ [
                                 nodes: @__orch_nodes__,
-                                llm_module: unquote(llm),
                                 model: unquote(model),
                                 system_prompt: unquote(system_prompt),
                                 max_iterations: unquote(max_iterations),
+                                temperature: unquote(temperature),
+                                max_tokens: unquote(max_tokens),
+                                generation_mode: unquote(generation_mode),
+                                output_schema: unquote(Macro.escape(output_schema)),
+                                llm_opts: unquote(llm_opts),
                                 req_options: unquote(req_options)
                               ] ++
                                 if(@__orch_gated_nodes__ != [],

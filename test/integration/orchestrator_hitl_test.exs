@@ -6,7 +6,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
   alias Jido.Composer.Directive.SuspendForHuman
   alias Jido.Composer.HITL.ApprovalResponse
   alias Jido.Composer.Orchestrator.Strategy
-  alias Jido.Composer.TestSupport.MockLLM
+  alias Jido.Composer.TestSupport.LLMStub
 
   # -- Test agent (bare, for manual strategy init) --
 
@@ -32,8 +32,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
     strategy_opts =
       [
         nodes: nodes,
-        llm_module: MockLLM,
-        model: "mock:test-model",
+        model: "stub:test-model",
         system_prompt: "You are a helpful assistant.",
         max_iterations: 10,
         gated_nodes: gated_nodes
@@ -89,17 +88,11 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
   end
 
   defp execute_llm(%Jido.Instruction{params: params}) do
-    llm_module = params[:llm_module]
-    conversation = params[:conversation]
-    tool_results = params[:tool_results] || []
-    tools = params[:tools] || []
-    opts = params[:opts] || []
-
-    case llm_module.generate(conversation, tool_results, tools, opts) do
-      {:ok, response, updated_conversation} ->
+    case LLMStub.execute(params) do
+      {:ok, %{response: response, conversation: conversation}} ->
         %{
           status: :ok,
-          result: %{response: response, conversation: updated_conversation},
+          result: %{response: response, conversation: conversation},
           meta: %{}
         }
 
@@ -122,7 +115,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       agent = init_agent(gated_nodes: ["add"])
 
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
-      MockLLM.setup([{:tool_calls, [tool_call]}])
+      LLMStub.setup([{:tool_calls, [tool_call]}])
 
       {agent, directives} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add 5+3"})], %{})
@@ -143,7 +136,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [tool_call]},
         {:final_answer, "5 + 3 = 8.0"}
       ])
@@ -177,7 +170,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [tool_call]},
         {:final_answer, "The add tool was rejected, so I cannot compute."}
       ])
@@ -219,7 +212,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
         %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}}
       ]
 
-      MockLLM.setup([{:tool_calls, calls}])
+      LLMStub.setup([{:tool_calls, calls}])
 
       {agent, directives} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Use both"})], %{})
@@ -248,7 +241,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
         %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}}
       ]
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, calls},
         {:final_answer, "Add is 8, echo is hello"}
       ])
@@ -285,7 +278,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
         %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}}
       ]
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, calls},
         {:final_answer, "Handled cancellation"}
       ])
@@ -331,7 +324,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
         %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}}
       ]
 
-      MockLLM.setup([{:tool_calls, calls}])
+      LLMStub.setup([{:tool_calls, calls}])
 
       {agent, directives} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Use both"})], %{})
@@ -363,7 +356,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [tool_call]},
         {:final_answer, "8.0"}
       ])

@@ -2,13 +2,13 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
   use ExUnit.Case, async: true
 
   alias Jido.Composer.TestActions.{AddAction, EchoAction}
-  alias Jido.Composer.TestSupport.MockLLM
+  alias Jido.Composer.TestSupport.LLMStub
 
   defmodule SimpleOrchestrator do
     use Jido.Composer.Orchestrator,
       name: "simple_orchestrator",
       description: "A simple orchestrator for testing",
-      llm: Jido.Composer.TestSupport.MockLLM,
+      model: "anthropic:claude-sonnet-4-20250514",
       nodes: [
         Jido.Composer.TestActions.AddAction,
         Jido.Composer.TestActions.EchoAction
@@ -20,7 +20,7 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
   defmodule MinimalOrchestrator do
     use Jido.Composer.Orchestrator,
       name: "minimal_orchestrator",
-      llm: Jido.Composer.TestSupport.MockLLM,
+      model: "anthropic:claude-sonnet-4-20250514",
       nodes: [Jido.Composer.TestActions.AddAction]
   end
 
@@ -28,7 +28,6 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
     use Jido.Composer.Orchestrator,
       name: "gated_orchestrator",
       description: "Orchestrator with approval-gated nodes",
-      llm: Jido.Composer.TestSupport.MockLLM,
       nodes: [
         Jido.Composer.TestActions.AddAction,
         {Jido.Composer.TestActions.EchoAction, requires_approval: true}
@@ -49,7 +48,6 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
     test "strategy_opts contain expected configuration" do
       opts = SimpleOrchestrator.strategy_opts()
       assert is_list(opts[:nodes])
-      assert opts[:llm_module] == MockLLM
       assert opts[:system_prompt] == "You are a helpful test assistant."
       assert opts[:max_iterations] == 5
     end
@@ -75,6 +73,16 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
       opts = MinimalOrchestrator.strategy_opts()
       assert opts[:req_options] == []
     end
+
+    test "generation_mode defaults to :generate_text" do
+      opts = MinimalOrchestrator.strategy_opts()
+      assert opts[:generation_mode] == :generate_text
+    end
+
+    test "llm_opts defaults to empty list" do
+      opts = MinimalOrchestrator.strategy_opts()
+      assert opts[:llm_opts] == []
+    end
   end
 
   describe "node auto-wrapping" do
@@ -95,7 +103,6 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
 
   describe "query/3" do
     test "sends orchestrator_start signal and returns directives" do
-      MockLLM.setup([{:final_answer, "Test response"}])
       agent = SimpleOrchestrator.new()
 
       {agent, directives} = SimpleOrchestrator.query(agent, "Hello", %{})
@@ -108,15 +115,19 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
 
   describe "query_sync/3" do
     test "blocks until orchestrator produces final answer" do
-      MockLLM.setup([{:final_answer, "The answer is 42"}])
+      plug = LLMStub.setup_req_stub(:dsl_sync_final, [{:final_answer, "The answer is 42"}])
       agent = SimpleOrchestrator.new()
+      # Inject the stub plug into the strategy's req_options
+      agent = put_in(agent.state.__strategy__.req_options, plug: plug)
 
       assert {:ok, "The answer is 42"} = SimpleOrchestrator.query_sync(agent, "What is 42?")
     end
 
     test "returns error on LLM failure" do
-      MockLLM.setup([{:error, "API down"}])
+      # Provide multiple error responses to cover Jido.Exec retry attempts
+      plug = LLMStub.setup_req_stub(:dsl_sync_error, [{:error, "API down"}, {:error, "API down"}])
       agent = SimpleOrchestrator.new()
+      agent = put_in(agent.state.__strategy__.req_options, plug: plug)
 
       assert {:error, _reason} = SimpleOrchestrator.query_sync(agent, "Fail")
     end
@@ -126,7 +137,6 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
     defmodule OptionsOrchestrator do
       use Jido.Composer.Orchestrator,
         name: "options_orchestrator",
-        llm: Jido.Composer.TestSupport.MockLLM,
         nodes: [
           Jido.Composer.TestActions.AddAction,
           {Jido.Composer.TestActions.EchoAction,
@@ -157,7 +167,6 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
     defmodule HITLOrchestrator do
       use Jido.Composer.Orchestrator,
         name: "hitl_orchestrator",
-        llm: Jido.Composer.TestSupport.MockLLM,
         nodes: [
           {Jido.Composer.TestActions.AddAction, requires_approval: true}
         ],
@@ -180,6 +189,39 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
     test "non-gated nodes are not in gated_nodes list" do
       opts = GatedOrchestrator.strategy_opts()
       refute "add" in opts[:gated_nodes]
+    end
+  end
+
+  describe "LLM generation options in DSL" do
+    defmodule CustomLLMOrchestrator do
+      use Jido.Composer.Orchestrator,
+        name: "custom_llm_orchestrator",
+        model: "anthropic:claude-sonnet-4-20250514",
+        nodes: [Jido.Composer.TestActions.AddAction],
+        temperature: 0.2,
+        max_tokens: 4096,
+        generation_mode: :generate_text,
+        llm_opts: [top_p: 0.95]
+    end
+
+    test "temperature is passed to strategy opts" do
+      opts = CustomLLMOrchestrator.strategy_opts()
+      assert opts[:temperature] == 0.2
+    end
+
+    test "max_tokens is passed to strategy opts" do
+      opts = CustomLLMOrchestrator.strategy_opts()
+      assert opts[:max_tokens] == 4096
+    end
+
+    test "generation_mode is passed to strategy opts" do
+      opts = CustomLLMOrchestrator.strategy_opts()
+      assert opts[:generation_mode] == :generate_text
+    end
+
+    test "llm_opts are passed to strategy opts" do
+      opts = CustomLLMOrchestrator.strategy_opts()
+      assert opts[:llm_opts] == [top_p: 0.95]
     end
   end
 end

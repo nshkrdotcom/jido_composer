@@ -101,24 +101,28 @@ The DSL generates a Jido Agent module with:
 An Orchestrator is defined by its available nodes, an LLM module, and a system
 prompt:
 
-| Element           | Shape              | Purpose                                                                |
-| ----------------- | ------------------ | ---------------------------------------------------------------------- |
-| **Nodes**         | list of node specs | Available tools for the LLM                                            |
-| **LLM**           | module             | Decision engine (default: [LLM facade](orchestrator/llm-behaviour.md)) |
-| **System prompt** | string             | Instructions for the LLM                                               |
+| Element           | Shape              | Purpose                                                                              |
+| ----------------- | ------------------ | ------------------------------------------------------------------------------------ |
+| **Nodes**         | list of node specs | Available tools for the LLM                                                          |
+| **LLM**           | via LLMAction      | Decision engine ([LLMAction](orchestrator/llm-integration.md) calls ReqLLM directly) |
+| **System prompt** | string             | Instructions for the LLM                                                             |
 
 ### Configuration Surface
 
 ```
 use Jido.Composer.Orchestrator,
-  name:           string        — agent identity
-  description:    string        — what this orchestrator does (used when nested)
-  model:          string        — req_llm model spec (e.g. "anthropic:claude-sonnet-4-20250514")
-  llm:            module        — LLM module with generate/4 (default: Jido.Composer.Orchestrator.LLM)
-  nodes:          list          — available nodes (actions, agents, other compositions)
-  system_prompt:  string        — LLM system instructions
-  max_iterations: integer       — ReAct loop safety limit (default: 10)
-  req_options:    keyword       — opaque Req HTTP options forwarded to LLM (default: [])
+  name:            string        — agent identity
+  description:     string        — what this orchestrator does (used when nested)
+  model:           string        — req_llm model spec (e.g. "anthropic:claude-sonnet-4-20250514")
+  nodes:           list          — available nodes (actions, agents, other compositions)
+  system_prompt:   string        — LLM system instructions
+  max_iterations:  integer       — ReAct loop safety limit (default: 10)
+  temperature:     float         — sampling temperature (default: nil)
+  max_tokens:      integer       — maximum tokens in response (default: nil)
+  generation_mode: atom          — :generate_text | :generate_object | :stream_text | :stream_object
+  output_schema:   map           — JSON Schema for object generation modes (default: nil)
+  llm_opts:        keyword       — additional options passed through to req_llm (default: [])
+  req_options:     keyword       — opaque Req HTTP options forwarded to LLMAction (default: [])
 ```
 
 ### Generated Functions

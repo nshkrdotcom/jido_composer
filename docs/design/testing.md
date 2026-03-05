@@ -16,7 +16,7 @@ compile-time validation).
 | Approach      | When to Use                                                                                                                             |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | **Cassette**  | Any test that involves LLM responses, tool call formats, or HTTP-dependent behaviour. Preferred even for unit tests of response parsing |
-| **Mock LLM**  | Only for pure strategy logic that does not depend on response shape (e.g., testing that the strategy emits the right directive type)    |
+| **LLMStub**   | Strategy logic tests (direct mode) and DSL integration tests (plug mode). See [LLMStub Patterns](#llmstub-patterns)                     |
 | **No double** | Pure data structures (Machine transitions, context deep merge, AgentTool conversion)                                                    |
 
 Cassettes capture the full response structure — headers, status codes, body
@@ -65,8 +65,8 @@ responses, the test uses a cassette to provide real response data:
 | `ActionNode`            | Context accumulation via deep merge                                 | None (pure) |
 | `AgentNode`             | Struct construction, mode validation                                | None (pure) |
 | `AgentTool`             | Node-to-ReqLLM.Tool conversion, argument mapping, result formatting | None (pure) |
-| `LLM` (facade)          | Response parsing, tool call extraction, error handling              | Cassette    |
-| `Orchestrator.Strategy` | Directive emission for LLM results, tool dispatch                   | Cassette    |
+| `LLMAction`             | Response parsing, tool call extraction, error handling              | Cassette    |
+| `Orchestrator.Strategy` | Directive emission for LLM results, tool dispatch                   | LLMStub     |
 | `Workflow.Strategy`     | FSM execution, directive emission                                   | None (pure) |
 | `Error`                 | Error class construction, message formatting                        | None (pure) |
 
@@ -112,7 +112,7 @@ transparently.
 sequenceDiagram
     participant Test
     participant Cassette as ReqCassette
-    participant Facade as LLM Facade
+    participant LLMAction as LLMAction
     participant ReqLLM as req_llm
     participant Req as Req HTTP
     participant API as LLM API
@@ -120,8 +120,8 @@ sequenceDiagram
     Test->>Cassette: with_cassette("test_name", fn plug -> ... end)
 
     alt First run (recording)
-        Test->>Facade: generate(ctx, results, tools, req_options: [plug: plug])
-        Facade->>ReqLLM: generate_text(model, context, req_http_options: [plug: plug])
+        Test->>LLMAction: run(params with req_options: [plug: plug])
+        LLMAction->>ReqLLM: generate_text(model, context, req_http_options: [plug: plug])
         ReqLLM->>Req: request(plug: plug, ...)
         Req->>Cassette: intercepted by plug
         Cassette->>API: forward to real API
@@ -130,8 +130,8 @@ sequenceDiagram
         Cassette-->>Req: return response
         Req-->>ReqLLM: parsed response
     else Subsequent runs (replay)
-        Test->>Facade: generate(ctx, results, tools, req_options: [plug: plug])
-        Facade->>ReqLLM: generate_text(model, context, req_http_options: [plug: plug])
+        Test->>LLMAction: run(params with req_options: [plug: plug])
+        LLMAction->>ReqLLM: generate_text(model, context, req_http_options: [plug: plug])
         ReqLLM->>Req: request(plug: plug, ...)
         Req->>Cassette: intercepted by plug
         Cassette->>Cassette: match request in cassette
@@ -174,9 +174,9 @@ so every cassette-based test applies them consistently.
 ## Req Options Propagation
 
 For cassette testing to work, the `plug:` option must reach the actual Req HTTP
-call inside req_llm. The LLM facade maps the strategy's `:req_options` to
-req_llm's `:req_http_options` key, which passes options through to the
-underlying Req calls.
+call inside req_llm. LLMAction maps the strategy's `:req_options` to req_llm's
+`:req_http_options` key, which passes options through to the underlying Req
+calls.
 
 ### The Propagation Path
 
@@ -184,19 +184,19 @@ underlying Req calls.
 flowchart LR
     Test["Test<br/>(with_cassette)"]
     Strategy["Orchestrator<br/>Strategy"]
-    Facade["LLM Facade<br/>(generate/4)"]
+    LLMAction["LLMAction<br/>(run/2)"]
     ReqLLM["req_llm<br/>(generate_text/3)"]
     Req["Req HTTP<br/>(plug: ...)"]
 
     Test -->|"req_options in context<br/>or opts"| Strategy
-    Strategy -->|"opts[:req_options]"| Facade
-    Facade -->|"req_http_options:"| ReqLLM
+    Strategy -->|"params[:req_options]"| LLMAction
+    LLMAction -->|"req_http_options:"| ReqLLM
     ReqLLM -->|"plug: ..."| Req
 ```
 
-The [LLM facade](orchestrator/llm-behaviour.md) accepts `req_options` as part
-of its `opts` keyword list and maps it to `req_http_options` for req_llm. This
-keeps the transport concern entirely within the facade and the test setup.
+[LLMAction](orchestrator/llm-integration.md) accepts `req_options` as part of
+its instruction params and maps it to `req_http_options` for req_llm. This
+keeps the transport concern entirely within LLMAction and the test setup.
 
 ### What Propagates
 
@@ -206,13 +206,66 @@ keeps the transport concern entirely within the facade and the test setup.
 
 ### Design Constraints
 
-- **LLM modules own their HTTP calls.** The Orchestrator Strategy never makes
-  HTTP requests directly — it delegates to the LLM module via directives.
+- **LLMAction owns the HTTP calls.** The Orchestrator Strategy never makes
+  HTTP requests directly -- it delegates to LLMAction via RunInstruction
+  directives.
 - **req_options are opaque to the strategy.** The strategy passes them through
-  to the LLM module without inspecting or modifying them.
+  to LLMAction without inspecting or modifying them.
 - **The test controls the transport.** By providing `plug:` through
   `req_options`, the test intercepts all HTTP traffic without the strategy or
-  LLM module needing special test-mode logic.
+  LLMAction needing special test-mode logic.
+
+## LLMStub Patterns
+
+`Jido.Composer.TestSupport.LLMStub` (`test/support/llm_stub.ex`) provides
+predetermined LLM responses for tests that do not need real HTTP interactions.
+It operates in two modes:
+
+### Direct Mode (strategy tests)
+
+For tests that manually drive the directive loop, `LLMStub.execute/1` pops
+responses from a process-dictionary queue. The test intercepts the
+RunInstruction directive targeting LLMAction and calls `LLMStub.execute/1`
+with the instruction's params instead of executing the action.
+
+```
+LLMStub.setup([
+  {:tool_calls, [%{id: "call_1", name: "my_tool", arguments: %{}}]},
+  {:final_answer, "Done."}
+])
+
+# Drive the directive loop manually:
+# 1. query(agent, "do something") -> [RunInstruction(LLMAction)]
+# 2. LLMStub.execute(instruction.params) -> {:ok, %{response: ..., conversation: ...}}
+# 3. cmd(agent, {:orchestrator_llm_result, result}) -> [RunInstruction(tool)]
+# ...
+```
+
+Responses can be:
+
+- `{:tool_calls, [call_structs]}` -- simulate the LLM choosing tools
+- `{:final_answer, "text"}` -- simulate completion
+- `{:error, reason}` -- simulate failures
+
+### Plug Mode (DSL/integration tests)
+
+For tests that use `query_sync` where LLMAction runs through the full
+Req/ReqLLM stack, `LLMStub.setup_req_stub/2` registers a `Req.Test` stub that
+serves Anthropic-format JSON responses:
+
+```
+plug = LLMStub.setup_req_stub(:my_test, [
+  {:tool_calls, [%{id: "call_1", name: "my_tool", arguments: %{}}]},
+  {:final_answer, "Done."}
+])
+
+# The orchestrator is configured with req_options: [plug: plug]
+# LLMAction's Req calls are intercepted by the stub
+```
+
+The stub generates proper Anthropic API response JSON including message IDs,
+usage data, and content blocks. Responses are stored in an Agent process so
+they survive across process boundaries.
 
 ## Directory Structure
 
@@ -225,7 +278,7 @@ test/
 ├── support/
 │   ├── test_actions.ex             # Stub action modules
 │   ├── test_agents.ex              # Stub agent modules
-│   ├── mock_llm.ex                 # Minimal mock LLM (strategy logic tests only)
+│   ├── llm_stub.ex                 # LLMStub: direct mode + Req plug mode
 │   └── cassette_helper.ex          # Shared cassette setup and filtering
 ├── jido/composer/
 │   ├── node_test.exs               # Unit: Node behaviour

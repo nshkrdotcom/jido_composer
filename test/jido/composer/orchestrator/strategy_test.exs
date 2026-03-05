@@ -4,7 +4,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.Composer.Orchestrator.Strategy
   alias Jido.Composer.TestActions.{AddAction, EchoAction}
-  alias Jido.Composer.TestSupport.MockLLM
+  alias Jido.Composer.TestSupport.LLMStub
 
   defmodule TestOrchestratorAgent do
     use Jido.Agent,
@@ -20,8 +20,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
     strategy_opts = [
       nodes: nodes,
-      llm_module: MockLLM,
-      model: "mock:test-model",
+      model: "stub:test-model",
       system_prompt: system_prompt,
       max_iterations: max_iterations,
       req_options: []
@@ -47,7 +46,6 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       state = get_state(agent)
 
       assert state.status == :idle
-      assert state.llm_module == MockLLM
       assert state.system_prompt == "You are a test assistant."
       assert state.max_iterations == 10
       assert state.iteration == 0
@@ -79,7 +77,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
   describe "cmd/3 :orchestrator_start" do
     test "single-turn final answer sets status to completed" do
-      MockLLM.setup([{:final_answer, "Hello world!"}])
+      LLMStub.setup([{:final_answer, "Hello world!"}])
       agent = init_agent()
 
       {agent, directives} =
@@ -92,7 +90,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert directive.result_action == :orchestrator_llm_result
 
       # Simulate runtime executing the LLM call and returning result
-      llm_result = execute_llm_directive(directive, agent)
+      llm_result = execute_llm_directive(directive)
 
       {agent, directives} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
@@ -104,7 +102,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
     end
 
     test "stores query in state" do
-      MockLLM.setup([{:final_answer, "OK"}])
+      LLMStub.setup([{:final_answer, "OK"}])
       agent = init_agent()
 
       {agent, _} =
@@ -122,14 +120,14 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
   describe "cmd/3 :orchestrator_llm_result with tool calls" do
     test "single tool call emits RunInstruction for action" do
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
-      MockLLM.setup([{:tool_calls, [tool_call]}])
+      LLMStub.setup([{:tool_calls, [tool_call]}])
       agent = init_agent()
 
       # Start
       {agent, [llm_directive]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add 5+3"})], ctx())
 
-      llm_result = execute_llm_directive(llm_directive, agent)
+      llm_result = execute_llm_directive(llm_directive)
 
       # LLM result with tool calls
       {agent, directives} =
@@ -152,13 +150,13 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
         %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}}
       ]
 
-      MockLLM.setup([{:tool_calls, calls}])
+      LLMStub.setup([{:tool_calls, calls}])
       agent = init_agent()
 
       {agent, [llm_directive]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Do things"})], ctx())
 
-      llm_result = execute_llm_directive(llm_directive, agent)
+      llm_result = execute_llm_directive(llm_directive)
 
       {_agent, directives} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
@@ -175,7 +173,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
     test "collects tool result and triggers next LLM call when all tools complete" do
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [tool_call]},
         {:final_answer, "The result is 8.0"}
       ])
@@ -186,7 +184,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       {agent, [llm_directive]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add 5+3"})], ctx())
 
-      llm_result = execute_llm_directive(llm_directive, agent)
+      llm_result = execute_llm_directive(llm_directive)
 
       # LLM returns tool call
       {agent, [tool_directive]} =
@@ -221,7 +219,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
         %{id: "call_2", name: "echo", arguments: %{"message" => "hi"}}
       ]
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, calls},
         {:final_answer, "Done"}
       ])
@@ -232,7 +230,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       {agent, [llm_directive]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Do"})], ctx())
 
-      llm_result = execute_llm_directive(llm_directive, agent)
+      llm_result = execute_llm_directive(llm_directive)
 
       # LLM returns two tool calls
       {agent, [d1, d2]} =
@@ -280,7 +278,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       # Set up an infinite loop of tool calls
       tool_call = %{id: "call_1", name: "echo", arguments: %{"message" => "loop"}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [tool_call]},
         {:tool_calls, [tool_call]},
         {:tool_calls, [tool_call]}
@@ -292,7 +290,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       {agent, [llm_dir]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "loop"})], ctx())
 
-      llm_result = execute_llm_directive(llm_dir, agent)
+      llm_result = execute_llm_directive(llm_dir)
 
       # Iteration 1: LLM returns tool call
       {agent, [tool_dir]} =
@@ -312,7 +310,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
           ctx()
         )
 
-      llm_result2 = execute_llm_directive(llm_dir2, agent)
+      llm_result2 = execute_llm_directive(llm_dir2)
 
       # Iteration 2: LLM returns tool call again -> should hit max
       {agent, directives} =
@@ -329,7 +327,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
     test "scopes tool results under tool name" do
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [tool_call]},
         {:final_answer, "8.0"}
       ])
@@ -339,7 +337,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       {agent, [llm_dir]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add"})], ctx())
 
-      llm_result = execute_llm_directive(llm_dir, agent)
+      llm_result = execute_llm_directive(llm_dir)
 
       {agent, [tool_dir]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
@@ -365,7 +363,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
   describe "dynamic approval_policy" do
     test "approval_policy function gates tool calls dynamically" do
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 100.0, "amount" => 50.0}}
-      MockLLM.setup([{:tool_calls, [tool_call]}])
+      LLMStub.setup([{:tool_calls, [tool_call]}])
 
       # Policy: require approval when amount > 10
       policy = fn call, _context ->
@@ -375,8 +373,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
       strategy_opts = [
         nodes: [AddAction, EchoAction],
-        llm_module: MockLLM,
-        model: "mock:test-model",
+        model: "stub:test-model",
         system_prompt: "test",
         max_iterations: 10,
         req_options: [],
@@ -390,7 +387,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       {agent, [llm_dir]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add big"})], ctx())
 
-      llm_result = execute_llm_directive(llm_dir, agent)
+      llm_result = execute_llm_directive(llm_dir)
 
       {agent, directives} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
@@ -407,7 +404,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
     test "approval_policy :proceed allows tool call through" do
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 1.0, "amount" => 1.0}}
-      MockLLM.setup([{:tool_calls, [tool_call]}, {:final_answer, "2.0"}])
+      LLMStub.setup([{:tool_calls, [tool_call]}, {:final_answer, "2.0"}])
 
       # Policy: require approval when amount > 10 (this should pass through)
       policy = fn call, _context ->
@@ -417,8 +414,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
       strategy_opts = [
         nodes: [AddAction, EchoAction],
-        llm_module: MockLLM,
-        model: "mock:test-model",
+        model: "stub:test-model",
         system_prompt: "test",
         max_iterations: 10,
         req_options: [],
@@ -432,7 +428,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       {agent, [llm_dir]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add small"})], ctx())
 
-      llm_result = execute_llm_directive(llm_dir, agent)
+      llm_result = execute_llm_directive(llm_dir)
 
       {agent, directives} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
@@ -464,15 +460,14 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
   describe "snapshot/2 with HITL" do
     test "snapshot includes HITL details when awaiting approval" do
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls,
          [%{id: "call_1", name: "add", arguments: %{"value" => 1.0, "amount" => 2.0}}]}
       ])
 
       strategy_opts = [
         nodes: [AddAction, EchoAction],
-        llm_module: MockLLM,
-        model: "mock:test-model",
+        model: "stub:test-model",
         system_prompt: "test",
         max_iterations: 10,
         req_options: [],
@@ -486,7 +481,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       {agent, [llm_dir]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add"})], ctx())
 
-      llm_result = execute_llm_directive(llm_dir, agent)
+      llm_result = execute_llm_directive(llm_dir)
 
       {agent, _directives} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
@@ -501,13 +496,13 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
   describe "LLM error handling" do
     test "sets error status on LLM error" do
-      MockLLM.setup([{:error, "API timeout"}])
+      LLMStub.setup([{:error, "API timeout"}])
       agent = init_agent()
 
       {agent, [llm_dir]} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Hi"})], ctx())
 
-      llm_result = execute_llm_directive(llm_dir, agent)
+      llm_result = execute_llm_directive(llm_dir)
 
       {agent, _} =
         Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
@@ -519,7 +514,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
   describe "persistence readiness" do
     test "strategy state is serializable via :erlang.term_to_binary" do
-      MockLLM.setup([{:final_answer, "test"}])
+      LLMStub.setup([{:final_answer, "test"}])
       agent = init_agent()
 
       {agent, _directives} =
@@ -537,23 +532,11 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
   end
 
   # Simulates what the runtime does when executing a RunInstruction for LLM
-  defp execute_llm_directive(%Jido.Agent.Directive.RunInstruction{instruction: instr}, agent) do
-    state = get_state(agent)
-
-    # The instruction's action module is the internal LLM action
-    # We simulate the runtime calling it
-    result =
-      state.llm_module.generate(
-        state.conversation,
-        state.completed_tool_results,
-        state.tools,
-        query: state.query,
-        system_prompt: state.system_prompt,
-        req_options: state.req_options
-      )
+  defp execute_llm_directive(%Jido.Agent.Directive.RunInstruction{instruction: instr}) do
+    result = LLMStub.execute(instr.params)
 
     case result do
-      {:ok, response, conversation} ->
+      {:ok, %{response: response, conversation: conversation}} ->
         %{
           status: :ok,
           result: %{response: response, conversation: conversation},

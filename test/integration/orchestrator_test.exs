@@ -6,8 +6,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.Composer.CassetteHelper
-  alias Jido.Composer.Orchestrator.LLM
-  alias Jido.Composer.TestSupport.MockLLM
+  alias Jido.Composer.TestSupport.LLMStub
 
   # -- Orchestrator definitions --
 
@@ -15,7 +14,6 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
     use Jido.Composer.Orchestrator,
       name: "tool_orchestrator",
       description: "Orchestrator for integration tests",
-      llm: Jido.Composer.TestSupport.MockLLM,
       nodes: [
         Jido.Composer.TestActions.AddAction,
         Jido.Composer.TestActions.EchoAction
@@ -26,7 +24,6 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
   defmodule FailOrchestrator do
     use Jido.Composer.Orchestrator,
       name: "fail_orchestrator",
-      llm: Jido.Composer.TestSupport.MockLLM,
       nodes: [
         Jido.Composer.TestActions.FailAction,
         Jido.Composer.TestActions.EchoAction
@@ -37,7 +34,6 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
   defmodule BoundedOrchestrator do
     use Jido.Composer.Orchestrator,
       name: "bounded_orchestrator",
-      llm: Jido.Composer.TestSupport.MockLLM,
       nodes: [Jido.Composer.TestActions.EchoAction],
       max_iterations: 2
   end
@@ -68,19 +64,12 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
          %Jido.Instruction{action: Jido.Composer.Orchestrator.LLMAction} = instr,
          _meta
        ) do
-    # Execute MockLLM directly in the test process (process dictionary holds responses)
-    params = instr.params
-    llm_module = params[:llm_module]
-    conversation = params[:conversation]
-    tool_results = params[:tool_results] || []
-    tools = params[:tools] || []
-    opts = params[:opts] || []
-
-    case llm_module.generate(conversation, tool_results, tools, opts) do
-      {:ok, response, updated_conversation} ->
+    # Execute LLMStub directly in the test process (process dictionary holds responses)
+    case LLMStub.execute(instr.params) do
+      {:ok, %{response: response, conversation: conversation}} ->
         %{
           status: :ok,
-          result: %{response: response, conversation: updated_conversation},
+          result: %{response: response, conversation: conversation},
           meta: %{}
         }
 
@@ -103,7 +92,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
 
   describe "single-turn final answer" do
     test "orchestrator returns final answer without tool calls" do
-      MockLLM.setup([{:final_answer, "Hello! I'm here to help."}])
+      LLMStub.setup([{:final_answer, "Hello! I'm here to help."}])
 
       agent = ToolOrchestrator.new()
       {agent, directives} = ToolOrchestrator.query(agent, "Hello")
@@ -120,7 +109,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
     test "LLM calls a tool, gets result, and produces final answer" do
       tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [tool_call]},
         {:final_answer, "5 + 3 = 8.0"}
       ])
@@ -146,7 +135,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
         %{id: "call_2", name: "echo", arguments: %{"message" => "hello world"}}
       ]
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, calls},
         {:final_answer, "Add result is 15.0 and echo says hello world"}
       ])
@@ -167,7 +156,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
       call_1 = %{id: "call_1", name: "add", arguments: %{"value" => 1.0, "amount" => 2.0}}
       call_2 = %{id: "call_2", name: "add", arguments: %{"value" => 3.0, "amount" => 4.0}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [call_1]},
         {:tool_calls, [call_2]},
         {:final_answer, "First: 3.0, Second: 7.0"}
@@ -190,7 +179,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
     test "tool failure is reported back as tool result and LLM can recover" do
       fail_call = %{id: "call_1", name: "fail", arguments: %{}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [fail_call]},
         {:final_answer, "The tool failed, but I can still answer."}
       ])
@@ -209,7 +198,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
     test "halts with error when LLM keeps calling tools beyond limit" do
       loop_call = %{id: "call_loop", name: "echo", arguments: %{"message" => "loop"}}
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, [loop_call]},
         {:tool_calls, [loop_call]},
         {:tool_calls, [loop_call]}
@@ -227,7 +216,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
 
   describe "LLM error" do
     test "handles LLM generate failure gracefully" do
-      MockLLM.setup([{:error, "API rate limited"}])
+      LLMStub.setup([{:error, "API rate limited"}])
 
       agent = ToolOrchestrator.new()
       {agent, directives} = ToolOrchestrator.query(agent, "Hello")
@@ -245,7 +234,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
         %{id: "c2", name: "echo", arguments: %{"message" => "test"}}
       ]
 
-      MockLLM.setup([
+      LLMStub.setup([
         {:tool_calls, calls},
         {:final_answer, "Done"}
       ])
@@ -260,7 +249,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
     end
   end
 
-  # -- Cassette-driven tests using LLM --
+  # -- Cassette-driven tests using ReqLLM --
 
   # A bare agent for cassette tests (strategy initialized manually with req_options)
   defmodule CassetteAgent do
@@ -275,7 +264,6 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
   defp init_cassette_agent(plug) do
     strategy_opts = [
       nodes: [Jido.Composer.TestActions.AddAction, Jido.Composer.TestActions.EchoAction],
-      llm_module: LLM,
       model: "anthropic:claude-sonnet-4-20250514",
       system_prompt: "You are a helpful assistant with math and echo tools.",
       max_iterations: 10,
@@ -293,7 +281,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
   end
 
   # Executes the full ReAct loop using LLM with cassette plug.
-  # LLM calls go through Req -> cassette plug -> canned response.
+  # LLM calls go through LLMAction -> ReqLLM -> cassette plug -> canned response.
   # Tool calls go through Jido.Exec.run -> real action execution.
   defp execute_cassette_loop(agent, query, strategy_opts) do
     {agent, directives} =
@@ -310,21 +298,13 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
         instruction: %Jido.Instruction{action: Jido.Composer.Orchestrator.LLMAction} = instr,
         result_action: result_action
       } ->
-        # Execute LLM via the LLMAction — this makes a real Req call
-        # which the cassette plug intercepts
-        params = instr.params
-        llm_module = params[:llm_module]
-        conversation = params[:conversation]
-        tool_results = params[:tool_results] || []
-        tools = params[:tools] || []
-        opts = params[:opts] || []
-
+        # Execute LLMAction directly — this calls ReqLLM which the cassette plug intercepts
         payload =
-          case llm_module.generate(conversation, tool_results, tools, opts) do
-            {:ok, response, updated_conversation} ->
+          case Jido.Composer.Orchestrator.LLMAction.run(instr.params, %{}) do
+            {:ok, %{response: response, conversation: conversation}} ->
               %{
                 status: :ok,
-                result: %{response: response, conversation: updated_conversation},
+                result: %{response: response, conversation: conversation},
                 meta: %{}
               }
 
@@ -443,7 +423,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
 
   describe "snapshot" do
     test "reports idle before execution" do
-      MockLLM.setup([])
+      LLMStub.setup([])
       agent = ToolOrchestrator.new()
       ctx = %{agent_module: ToolOrchestrator, strategy_opts: ToolOrchestrator.strategy_opts()}
       snap = Jido.Composer.Orchestrator.Strategy.snapshot(agent, ctx)
@@ -453,7 +433,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
     end
 
     test "reports completed after final answer" do
-      MockLLM.setup([{:final_answer, "Done"}])
+      LLMStub.setup([{:final_answer, "Done"}])
 
       agent = ToolOrchestrator.new()
       {agent, directives} = ToolOrchestrator.query(agent, "Hi")
@@ -468,7 +448,7 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
     end
 
     test "reports error after failure" do
-      MockLLM.setup([{:error, "broken"}])
+      LLMStub.setup([{:error, "broken"}])
 
       agent = ToolOrchestrator.new()
       {agent, directives} = ToolOrchestrator.query(agent, "Hi")

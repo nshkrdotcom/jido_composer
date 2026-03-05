@@ -14,7 +14,7 @@ defmodule Jido.Composer.E2E.E2ETest do
   alias Jido.Composer.CassetteHelper
   alias Jido.Composer.HITL.ApprovalRequest
   alias Jido.Composer.Node.{ActionNode, FanOutNode, HumanNode}
-  alias Jido.Composer.Orchestrator.{LLM, Strategy}
+  alias Jido.Composer.Orchestrator.Strategy
 
   alias Jido.Composer.TestActions.{
     AddAction,
@@ -160,7 +160,6 @@ defmodule Jido.Composer.E2E.E2ETest do
 
     strategy_opts = [
       nodes: nodes,
-      llm_module: LLM,
       model: "anthropic:claude-sonnet-4-20250514",
       system_prompt:
         Keyword.get(
@@ -182,7 +181,7 @@ defmodule Jido.Composer.E2E.E2ETest do
     %Jido.Instruction{action: action, params: params}
   end
 
-  # Full ReAct directive loop: LLM calls go through Req -> cassette plug,
+  # Full ReAct directive loop: LLM calls go through LLMAction -> ReqLLM -> cassette plug,
   # tool calls go through Jido.Exec.run for real action execution.
   defp execute_orchestrator_loop(agent, query) do
     {agent, directives} =
@@ -224,17 +223,11 @@ defmodule Jido.Composer.E2E.E2ETest do
   end
 
   defp execute_llm_instruction(%Jido.Instruction{params: params}) do
-    llm_module = params[:llm_module]
-    conversation = params[:conversation]
-    tool_results = params[:tool_results] || []
-    tools = params[:tools] || []
-    opts = params[:opts] || []
-
-    case llm_module.generate(conversation, tool_results, tools, opts) do
-      {:ok, response, updated_conversation} ->
+    case Jido.Composer.Orchestrator.LLMAction.run(params, %{}) do
+      {:ok, %{response: response, conversation: conversation}} ->
         %{
           status: :ok,
-          result: %{response: response, conversation: updated_conversation},
+          result: %{response: response, conversation: conversation},
           meta: %{}
         }
 
