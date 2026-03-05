@@ -64,9 +64,18 @@ classDiagram
         +new(opts)
     }
 
+    class FanOutNode {
+        name : String
+        branches : list(Node)
+        merge : function | :deep_merge
+        timeout : integer | :infinity
+        +new(opts)
+    }
+
     Node <|.. ActionNode
     Node <|.. AgentNode
     Node <|.. HumanNode
+    Node <|.. FanOutNode
 ```
 
 ### ActionNode
@@ -159,6 +168,62 @@ HumanNode carries per-instance configuration:
 
 See [Human-in-the-Loop](../hitl/README.md) for the full design of HITL
 support, including strategy integration, persistence, and nested propagation.
+
+### FanOutNode
+
+A Node that executes multiple child nodes concurrently and merges their results.
+The Workflow [Machine](../workflow/state-machine.md) has a single `status` field,
+so two nodes cannot execute simultaneously within the FSM. FanOutNode solves this
+by encapsulating parallel execution behind the standard Node interface — it
+appears as a single state to the FSM but internally spawns multiple branches.
+
+FanOutNode carries per-instance configuration:
+
+| Field      | Type                                  | Purpose                                                        |
+| ---------- | ------------------------------------- | -------------------------------------------------------------- |
+| `name`     | `String.t()`                          | Node identifier                                                |
+| `branches` | `[Node.t()]`                          | Child nodes to execute concurrently                            |
+| `merge`    | `(results -> map())` \| `:deep_merge` | Strategy for combining branch results (default: `:deep_merge`) |
+| `timeout`  | `pos_integer()` \| `:infinity`        | Maximum wait time for all branches (default: 30_000)           |
+
+When `run/2` is called:
+
+1. The FanOutNode spawns all branches concurrently (via `Task.async_stream` or
+   equivalent)
+2. Each branch receives the same input context
+3. Branch results are collected and merged using the configured merge strategy
+4. The merged result is returned as the node's output
+
+The default merge strategy (`:deep_merge`) scopes each branch result under the
+branch node's name, then deep-merges them into a single map:
+
+```elixir
+# Three branches: financial_review, legal_review, background_check
+# Result:
+%{
+  financial_review: %{score: 85, risk: :low},
+  legal_review: %{status: :clear, notes: "..."},
+  background_check: %{passed: true}
+}
+```
+
+Custom merge functions receive the list of `{branch_name, result}` tuples and
+return a single map, enabling domain-specific aggregation (e.g., voting,
+scoring, consensus).
+
+**Error handling**: If any branch fails, the FanOutNode can be configured to
+either fail fast (return `{:error, reason}` immediately) or collect partial
+results. The default is fail-fast.
+
+**Relationship to arrow combinators**: FanOutNode is the concrete implementation
+of the fan-out (`&&&`) combinator described in
+[Foundations](../foundations.md#arrow-combinators-parallel-and-fan-out). It makes
+the theoretical combinator available as a first-class Node type.
+
+**When to use FanOutNode vs. an Orchestrator**: Use FanOutNode when the set of
+parallel branches is known at definition time and results need deterministic
+merging. Use an Orchestrator when the LLM should dynamically decide which tools
+to invoke concurrently.
 
 ## Design Decisions
 

@@ -296,10 +296,17 @@ flexibility to investigate with various tools before recommending a fix.
 
 ## 6. Workflow with Parallel Sub-Agents
 
-**Pattern**: Workflow with multiple AgentNodes at one state (fan-out).
+**Pattern**: Workflow with a [FanOutNode](nodes/README.md#fanoutnode) at one
+state.
 
 **Scenario**: A due diligence check that runs financial analysis, legal review,
 and background check in parallel, then merges results for a final decision.
+
+The Workflow [Machine](workflow/state-machine.md) has a single `status` field —
+two nodes cannot execute simultaneously within the FSM. FanOutNode solves this
+by encapsulating parallel execution behind the standard Node interface: it
+appears as a single state to the FSM but internally spawns all branches
+concurrently and merges their results.
 
 ```mermaid
 stateDiagram-v2
@@ -328,17 +335,25 @@ use Jido.Composer.Workflow,
 use Jido.Composer.Orchestrator,
   name: "background_check", description: "Investigate background using public records", ...
 
-# The parallel review node is an action that fans out to sub-agents
-# and merges their results
+# FanOutNode runs all three reviews concurrently
+# Results are scoped under each branch's name and deep-merged
 use Jido.Composer.Workflow,
   name: "due_diligence",
   description: "Complete due diligence assessment",
   nodes: %{
-    gather_data:     GatherDataAction,
-    parallel_review: {ParallelReviewAgent, mode: :sync},
-    decision:        DecisionAction,
-    approve:         ApproveAction,
-    flag:            FlagForReviewAction
+    gather_data: GatherDataAction,
+    parallel_review: %FanOutNode{
+      name: "parallel_review",
+      branches: [
+        AgentNode.new(FinancialReviewWorkflow, mode: :sync),
+        AgentNode.new(LegalReviewWorkflow, mode: :sync),
+        AgentNode.new(BackgroundCheckOrchestrator, mode: :sync)
+      ],
+      timeout: 60_000
+    },
+    decision: DecisionAction,
+    approve:  ApproveAction,
+    flag:     FlagForReviewAction
   },
   transitions: %{
     {:gather_data, :ok}     => :parallel_review,
@@ -351,6 +366,23 @@ use Jido.Composer.Workflow,
   },
   initial: :gather_data
 ```
+
+The `parallel_review` state's FanOutNode spawns all three review agents
+concurrently. The merged result contains each branch's output scoped under its
+name:
+
+```
+%{
+  parallel_review: %{
+    financial_review: %{score: 85, risk: :low},
+    legal_review: %{status: :clear, notes: "..."},
+    background_check: %{passed: true}
+  }
+}
+```
+
+The downstream `decision` node reads from these scoped keys to make its
+determination.
 
 ---
 
@@ -404,7 +436,7 @@ know the details of each specialty.
 | Project Manager      | Orchestrator | Workflows + Actions      | Adaptive over deterministic            | 2     |
 | Content Publisher    | Workflow     | Orchestrator + Actions   | Deterministic with adaptive step       | 2     |
 | Customer Support     | Orchestrator | Workflows → Orchestrator | Mixed, 3 levels                        | 3     |
-| Due Diligence        | Workflow     | Mixed agents (parallel)  | Deterministic with parallel delegation | 2     |
+| Due Diligence        | Workflow     | FanOutNode (parallel)    | Deterministic with parallel delegation | 2     |
 | Product Development  | Orchestrator | Orchestrators            | Fully adaptive, multi-agent            | 2     |
 
 The common thread: the same [Node interface](nodes/README.md) and

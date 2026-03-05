@@ -69,6 +69,7 @@ A **node spec** is one of:
 | `ActionModule`               | An action, auto-wrapped as ActionNode                 |
 | `{ActionModule, opts}`       | An action with options                                |
 | `{AgentModule, mode: :sync}` | An agent (including other Workflows or Orchestrators) |
+| `%FanOutNode{...}`           | Parallel execution of multiple branches               |
 
 The DSL detects whether a module is an action or an agent and wraps it in the
 appropriate Node type.

@@ -138,6 +138,21 @@ sequenceDiagram
     Strategy->>Strategy: scope result under state name, transition, continue
 ```
 
+## Execution Flow: FanOutNode
+
+When the current state's node is a [FanOutNode](../nodes/README.md#fanoutnode):
+
+1. The strategy invokes the FanOutNode's `run/2`
+2. FanOutNode spawns all branches concurrently
+3. Each branch receives the same input context
+4. Branch results are collected and merged (scoped under each branch's name)
+5. The merged result is returned to the strategy as a single node result
+6. The strategy applies the result and transitions as with any other node
+
+From the strategy's perspective, FanOutNode is no different from an ActionNode —
+it receives a single result and applies a single transition. The parallelism is
+fully encapsulated within the node.
+
 ## Error Handling
 
 Errors from node execution result in outcome `:error`. The transition rules

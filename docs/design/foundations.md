@@ -108,9 +108,11 @@ fanout(f, g)(ctx) = merge(f(ctx), g(ctx))
 ```
 
 Run two nodes on the same input in parallel. Both receive the full context;
-their results are merged. In the [Workflow](workflow/README.md) DSL, this could
-be expressed as parallel states. In the [Orchestrator](orchestrator/README.md),
-the LLM can invoke multiple tools simultaneously.
+their results are merged. In the [Workflow](workflow/README.md),
+[FanOutNode](nodes/README.md#fanoutnode) provides this as a first-class Node
+type — it encapsulates concurrent execution behind the standard Node interface.
+In the [Orchestrator](orchestrator/README.md), the LLM can invoke multiple
+tools simultaneously.
 
 ### Split (first / `***`)
 
@@ -198,19 +200,19 @@ appears as an atomic operation to the parent.
 
 ## Summary
 
-| Concept              | Category Theory                 | jido_composer Representation                                         |
-| -------------------- | ------------------------------- | -------------------------------------------------------------------- |
-| Node                 | Morphism `A -> A`               | `Node.run(ctx) :: {:ok, ctx}`                                        |
-| Sequential pipe      | Composition `f >>> g`           | FSM transitions: `state_a -> state_b -> state_c`                     |
-| Context accumulation | Monoidal operation              | Scoped `deep_merge` — each node writes under its own key             |
-| Error handling       | Kleisli category (Result monad) | `{:error, reason}` short-circuits; `{:_, :error} => :failed`         |
-| Branching            | Coproduct / copairing           | Outcome atoms + FSM transition table                                 |
-| Parallel execution   | Product / fan-out (`&&&`)       | Concurrent node execution, merge results                             |
-| Pass-through         | Identity morphism               | `fn ctx -> {:ok, ctx} end`                                           |
-| Deterministic flow   | Concrete morphism chain         | Workflow (compile-time FSM)                                          |
-| Dynamic composition  | Free category                   | Orchestrator (LLM selects morphisms at runtime)                      |
-| Streaming            | F-coalgebra / unfold            | AgentNode with `mode: :streaming`                                    |
-| Nesting              | Functor between categories      | An agent running its own Workflow is a single morphism to the parent |
+| Concept              | Category Theory                 | jido_composer Representation                                                  |
+| -------------------- | ------------------------------- | ----------------------------------------------------------------------------- |
+| Node                 | Morphism `A -> A`               | `Node.run(ctx) :: {:ok, ctx}`                                                 |
+| Sequential pipe      | Composition `f >>> g`           | FSM transitions: `state_a -> state_b -> state_c`                              |
+| Context accumulation | Monoidal operation              | Scoped `deep_merge` — each node writes under its own key                      |
+| Error handling       | Kleisli category (Result monad) | `{:error, reason}` short-circuits; `{:_, :error} => :failed`                  |
+| Branching            | Coproduct / copairing           | Outcome atoms + FSM transition table                                          |
+| Parallel execution   | Product / fan-out (`&&&`)       | [FanOutNode](nodes/README.md#fanoutnode) — concurrent branches, merge results |
+| Pass-through         | Identity morphism               | `fn ctx -> {:ok, ctx} end`                                                    |
+| Deterministic flow   | Concrete morphism chain         | Workflow (compile-time FSM)                                                   |
+| Dynamic composition  | Free category                   | Orchestrator (LLM selects morphisms at runtime)                               |
+| Streaming            | F-coalgebra / unfold            | AgentNode with `mode: :streaming`                                             |
+| Nesting              | Functor between categories      | An agent running its own Workflow is a single morphism to the parent          |
 
 ## Laws That Must Hold
 

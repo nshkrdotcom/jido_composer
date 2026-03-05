@@ -15,6 +15,7 @@ graph TB
         AN["ActionNode"]
         AGN["AgentNode"]
         HN["HumanNode"]
+        FN["FanOutNode"]
         HITL["HITL<br/>(ApprovalRequest/Response)"]
         SFH["SuspendForHuman<br/>(Directive)"]
         WF["Workflow Strategy"]
@@ -33,6 +34,7 @@ graph TB
         Node --> AN
         Node --> AGN
         Node --> HN
+        Node --> FN
         HN --> HITL
         HITL --> SFH
         AN --> WF
@@ -81,6 +83,7 @@ All user-facing modules live under this namespace:
 | `Jido.Composer.Node.ActionNode`        | [Action adapter](nodes/README.md#actionnode)                     |
 | `Jido.Composer.Node.AgentNode`         | [Agent adapter](nodes/README.md#agentnode)                       |
 | `Jido.Composer.Node.HumanNode`         | [Human decision gate](hitl/human-node.md)                        |
+| `Jido.Composer.Node.FanOutNode`        | [Parallel branch execution](nodes/README.md#fanoutnode)          |
 | `Jido.Composer.HITL.ApprovalRequest`   | [Pending human decision](hitl/approval-lifecycle.md)             |
 | `Jido.Composer.HITL.ApprovalResponse`  | [Human decision response](hitl/approval-lifecycle.md)            |
 | `Jido.Composer.Workflow`               | [Workflow DSL](workflow/README.md) macro                         |
@@ -129,14 +132,14 @@ Both Workflow and Orchestrator are implemented as
 [Jido.Agent.Strategy](glossary.md#strategy) behaviours. The strategy system
 provides:
 
-| Callback          | Required | Purpose                                                 |
-| ----------------- | -------- | ------------------------------------------------------- |
-| `cmd/3`           | Yes      | Process instructions, return updated agent + directives |
-| `init/2`          | No       | Initialize strategy-specific state                      |
-| `tick/2`          | No       | Continuation for multi-step execution                   |
-| `snapshot/2`      | No       | Stable view of execution state                          |
-| `action_spec/1`   | No       | Schema for strategy-internal actions                    |
-| `signal_routes/1` | No       | Map signal types to strategy commands                   |
+| Callback          | Required | Purpose                                                                                                                                             |
+| ----------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cmd/3`           | Yes      | Process instructions, return updated agent + directives                                                                                             |
+| `init/2`          | No       | Initialize strategy-specific state                                                                                                                  |
+| `tick/2`          | No       | Continuation for multi-step execution                                                                                                               |
+| `snapshot/2`      | No       | Stable view of execution state                                                                                                                      |
+| `action_spec/1`   | No       | Schema for strategy-internal actions                                                                                                                |
+| `signal_routes/1` | No       | Map signal types to strategy commands (see [Signal Integration](#signal-integration) — effectively required for any strategy that receives signals) |
 
 Strategy state lives under `agent.state.__strategy__` and is managed via
 `Jido.Agent.Strategy.State` helpers. This keeps all state within the immutable
@@ -191,8 +194,14 @@ internal action (e.g., `:workflow_node_result`).
 ## Signal Integration
 
 Strategies declare signal routes that the AgentServer's SignalRouter uses to
-dispatch incoming signals to the appropriate strategy commands. Signal routes
-have a priority system:
+dispatch incoming signals to the appropriate strategy commands. AgentServer has
+**no default fallback** for unknown signal types — if a signal arrives with no
+matching route, it produces a `RoutingError`. The only built-in route is
+`jido.agent.stop`. This means every Composer strategy must declare explicit
+routes for all signal types it handles, and the DSL must auto-generate these
+routes from the declared nodes and transitions.
+
+Signal routes have a priority system:
 
 | Source   | Default Priority | Range      |
 | -------- | ---------------- | ---------- |
@@ -200,8 +209,15 @@ have a priority system:
 | Agent    | 0                | -25 to 25  |
 | Plugin   | -10              | -50 to -10 |
 
+Routes use the pattern `{"signal.type", {:strategy_cmd, :atom_action}}`, which
+translates to calling `cmd(agent, {:atom_action, signal.data})`. The strategy
+receives the signal data as an instruction with `action: :atom_action` and
+`params: signal.data`.
+
 Composer strategies declare routes for workflow and orchestrator-specific signal
-types (e.g., `composer.workflow.start`, `composer.orchestrator.query`).
+types (e.g., `composer.workflow.start`, `composer.orchestrator.query`), plus
+child lifecycle signals (`jido.agent.child.started`, `jido.agent.child.exit`)
+when AgentNodes are present.
 
 ## Error Handling
 

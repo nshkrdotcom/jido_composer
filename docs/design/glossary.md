@@ -71,6 +71,15 @@ decision atom, optional structured data, respondent identity, and timestamp.
 Delivered to the suspended flow as a [Signal](#signal). See
 [Approval Lifecycle](hitl/approval-lifecycle.md#approvalresponse).
 
+### FanOutNode
+
+A [Node](#node) type that executes multiple child nodes concurrently and merges
+their results. Encapsulates parallel execution behind the standard Node
+interface — the [Machine](#machine) sees a single state while multiple branches
+run simultaneously. This addresses the limitation that the Machine's single
+`status` field cannot represent two active states. See
+[Nodes — FanOutNode](nodes/README.md#fanoutnode).
+
 ### Error
 
 A structured error type defined via the Splode library in
@@ -135,7 +144,10 @@ strategies via signal routes. Defined in `Jido.Signal`.
 
 A mapping from a signal type string to a strategy command target. Strategies
 declare signal routes so the AgentServer knows how to route incoming signals
-to the appropriate `cmd/3` invocation.
+to the appropriate `cmd/3` invocation. Routes are **mandatory** — AgentServer
+has no default fallback for unknown signal types and produces a `RoutingError`
+for unrouted signals. The only built-in route is `jido.agent.stop`. See
+[Overview — Signal Integration](overview.md#signal-integration).
 
 ### Suspend
 

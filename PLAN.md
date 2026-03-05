@@ -46,6 +46,7 @@ jido_composer/
 │           ├── node/
 │           │   ├── action_node.ex       # Wraps Jido.Action as Node
 │           │   ├── agent_node.ex        # Wraps Jido.Agent as Node
+│           │   ├── fan_out_node.ex     # Parallel branch execution Node
 │           │   └── human_node.ex        # Human decision gate Node
 │           ├── workflow/
 │           │   ├── strategy.ex          # Workflow strategy (implements Jido.Agent.Strategy)
@@ -71,6 +72,7 @@ jido_composer/
 │   │   ├── node/
 │   │   │   ├── action_node_test.exs
 │   │   │   ├── agent_node_test.exs
+│   │   │   ├── fan_out_node_test.exs
 │   │   │   └── human_node_test.exs
 │   │   ├── workflow/
 │   │   │   ├── strategy_test.exs
@@ -511,23 +513,25 @@ against real LLM response structures.
 ### Composition Track
 
 13. **AgentNode** — write test for struct/mode validation, then implement
-14. **Workflow + AgentNode integration** — write test for sub-agent nodes in workflows
-15. **Orchestrator + Workflow nesting** — write cassette-driven test for workflow-as-tool
-16. **End-to-end tests** — full orchestration flows with recorded LLM cassettes
+14. **FanOutNode** — write test for concurrent branch execution, merge strategies, timeout, error handling, then implement
+15. **Workflow + AgentNode integration** — write test for sub-agent nodes in workflows
+16. **Workflow + FanOutNode integration** — write test for parallel branches within a workflow FSM state
+17. **Orchestrator + Workflow nesting** — write cassette-driven test for workflow-as-tool
+18. **End-to-end tests** — full orchestration flows with recorded LLM cassettes
 
 ### HITL Track (after Composition Track)
 
-17. **ApprovalRequest/Response structs** — define serializable structs, write validation tests
-18. **HumanNode** — write test for `{:ok, context, :suspend}` contract, prompt evaluation, context filtering
-19. **SuspendForHuman directive** — define directive struct, write test for strategy emission
-20. **Workflow + HumanNode** — write test for suspend/resume cycle: node returns `:suspend`, strategy pauses, resume signal triggers transition
-21. **Workflow HITL timeout** — write test for Schedule-based timeout, timeout outcome transition
-22. **Orchestrator approval gate** — write test for tool call partitioning (gated vs ungated), `requires_approval` metadata
-23. **Orchestrator concurrent HITL** — write test for mixed tool call states (`awaiting_tools_and_approval`), result collection, rejection with synthetic tool result
-24. **Orchestrator rejection policy** — write test for `:continue_siblings`, `:cancel_siblings`, `:abort_iteration`
-25. **HITL persistence** — write test for ChildRef serialization, checkpoint/thaw with pending HITL request, idempotent resume
-26. **Nested HITL integration** — write test for OuterWorkflow → InnerOrchestrator with HITL gate, cascading checkpoint, top-down resume
-27. **HITL DSL options** — write test for `hitl: [...]` configuration in Workflow and Orchestrator DSL macros
+19. **ApprovalRequest/Response structs** — define serializable structs, write validation tests
+20. **HumanNode** — write test for `{:ok, context, :suspend}` contract, prompt evaluation, context filtering
+21. **SuspendForHuman directive** — define directive struct, write test for strategy emission
+22. **Workflow + HumanNode** — write test for suspend/resume cycle: node returns `:suspend`, strategy pauses, resume signal triggers transition
+23. **Workflow HITL timeout** — write test for Schedule-based timeout, timeout outcome transition
+24. **Orchestrator approval gate** — write test for tool call partitioning (gated vs ungated), `requires_approval` metadata
+25. **Orchestrator concurrent HITL** — write test for mixed tool call states (`awaiting_tools_and_approval`), result collection, rejection with synthetic tool result
+26. **Orchestrator rejection policy** — write test for `:continue_siblings`, `:cancel_siblings`, `:abort_iteration`
+27. **HITL persistence** — write test for ChildRef serialization, checkpoint/thaw with pending HITL request, idempotent resume
+28. **Nested HITL integration** — write test for OuterWorkflow → InnerOrchestrator with HITL gate, cascading checkpoint, top-down resume
+29. **HITL DSL options** — write test for `hitl: [...]` configuration in Workflow and Orchestrator DSL macros
 
 ---
 
@@ -537,6 +541,7 @@ against real LLM response structures.
    - Machine: transition validation, wildcard fallbacks, terminal detection
    - ActionNode: context accumulation via deep merge
    - AgentNode: struct construction, mode validation
+   - FanOutNode: concurrent execution, merge strategies, timeout, error handling
    - Workflow Strategy: FSM execution with stub nodes, directive emission
    - LLM implementations: response parsing against real cassettes
    - Orchestrator Strategy: ReAct loop with cassette-driven LLM responses
@@ -546,6 +551,7 @@ against real LLM response structures.
    - Branching workflow (A → B | C based on outcome)
    - Error handling workflow (any error → failed state)
    - Nested workflow (workflow node inside workflow)
+   - Workflow with FanOutNode (parallel branches within a single FSM state)
    - Orchestrator single tool call (cassette)
    - Orchestrator multi-turn conversation (cassette)
    - Orchestrator calling a workflow as a tool (cassette)

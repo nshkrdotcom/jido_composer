@@ -137,13 +137,16 @@ For the algebraic laws that guarantee safe composition at any nesting depth, see
 Jido's `Plan` module defines DAGs of Instructions with dependency tracking. The
 key differences:
 
-| Aspect        | Plan (DAG)                                | Composer Workflow (FSM)                 |
-| ------------- | ----------------------------------------- | --------------------------------------- |
-| Graph type    | Directed acyclic graph                    | Finite state machine                    |
-| Parallelism   | Concurrent execution of independent steps | Sequential (one state active at a time) |
-| Branching     | Static dependency edges                   | Dynamic outcome-driven transitions      |
-| Runtime model | Batch execution                           | Reactive, event-driven                  |
+| Aspect        | Plan (DAG)                                | Composer Workflow (FSM)                                                      |
+| ------------- | ----------------------------------------- | ---------------------------------------------------------------------------- |
+| Graph type    | Directed acyclic graph                    | Finite state machine                                                         |
+| Parallelism   | Concurrent execution of independent steps | Sequential by default; parallel via [FanOutNode](nodes/README.md#fanoutnode) |
+| Branching     | Static dependency edges                   | Dynamic outcome-driven transitions                                           |
+| Runtime model | Batch execution                           | Reactive, event-driven                                                       |
 
 Plans are better for parallel batch processing with known dependencies. Workflows
 are better for sequential pipelines with conditional branching based on runtime
-outcomes.
+outcomes. When a workflow needs parallelism at a specific step,
+[FanOutNode](nodes/README.md#fanoutnode) encapsulates concurrent execution behind
+the standard Node interface — the FSM sees a single state while multiple branches
+execute concurrently.
