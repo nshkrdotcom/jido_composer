@@ -126,8 +126,8 @@
 
 > **References**: `docs/design/nodes/README.md` — FanOutNode section: struct fields, execution steps, merge strategies, error handling, relationship to `&&&` combinator. `docs/design/workflow/strategy.md` — "Execution Flow: FanOutNode". `docs/design/foundations.md` — "Arrow Combinators: Parallel and Fan-Out". `prototypes/learnings.md` — "FanOutNode — Pure Node Implementation" (Task.async_stream confirmed). `prototypes/test_fan_out_execution.exs` — 8 tests including 10x speedup.
 
-- [ ] 15.1 Write tests for FanOutNode in `test/jido/composer/node/fan_out_node_test.exs` (concurrent execution, merge strategies, fail-fast, timeout, single branch)
-- [ ] 15.2 Implement `Jido.Composer.Node.FanOutNode` in `lib/jido/composer/node/fan_out_node.ex`
+- [x] 15.1 Write tests for FanOutNode in `test/jido/composer/node/fan_out_node_test.exs` (concurrent execution, merge strategies, fail-fast, timeout, single branch)
+- [x] 15.2 Implement `Jido.Composer.Node.FanOutNode` in `lib/jido/composer/node/fan_out_node.ex`
 
 ## 16. Workflow + AgentNode Composition
 
