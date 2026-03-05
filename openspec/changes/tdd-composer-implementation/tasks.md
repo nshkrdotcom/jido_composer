@@ -133,9 +133,9 @@
 
 > **References**: `docs/design/composition.md` — Supported compositions table, communication sequence diagram, key properties. `docs/design/workflow/strategy.md` — AgentNode execution flow. `docs/design/nodes/context-flow.md` — "Context Across Agent Boundaries" (serializable, no PIDs). `prototypes/test_agent_server_children.exs` — full SpawnAgent lifecycle.
 
-- [ ] 16.1 Write tests in `test/integration/workflow_agent_node_test.exs` (sub-agent in workflow, context across boundary, failure handling)
-- [ ] 16.2 Update Workflow.Strategy to handle AgentNode dispatch (SpawnAgent, child_started, child_result)
-- [ ] 16.3 Fix any issues discovered during composition testing
+- [x] 16.1 Write tests in `test/integration/workflow_agent_node_test.exs` (sub-agent in workflow, context across boundary, failure handling)
+- [x] 16.2 Update Workflow.Strategy to handle AgentNode dispatch (SpawnAgent, child_started, child_result)
+- [x] 16.3 Fix any issues discovered during composition testing
 
 ## 17. Workflow + FanOutNode Composition
 

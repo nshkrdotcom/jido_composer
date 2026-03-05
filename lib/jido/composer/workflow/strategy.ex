@@ -11,6 +11,7 @@ defmodule Jido.Composer.Workflow.Strategy do
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.Composer.Node.ActionNode
+  alias Jido.Composer.Node.AgentNode
   alias Jido.Composer.Workflow.Machine
 
   # -- init/2 --
@@ -88,6 +89,50 @@ defmodule Jido.Composer.Workflow.Strategy do
     end
   end
 
+  def cmd(agent, [%Jido.Instruction{action: :workflow_child_started} | _rest], _ctx) do
+    # Child agent has started — no action needed for sync mode.
+    # The SpawnAgent directive already contains the context; the AgentServer
+    # handles delivery to the child.
+    {agent, []}
+  end
+
+  def cmd(agent, [%Jido.Instruction{action: :workflow_child_result} = instr | _rest], _ctx) do
+    strat = StratState.get(agent)
+    params = instr.params
+
+    case params do
+      %{result: {:ok, result}} ->
+        machine = Machine.apply_result(strat.machine, result)
+
+        case Machine.transition(machine, :ok) do
+          {:ok, machine} ->
+            agent = put_machine(agent, machine)
+            handle_after_transition(agent)
+
+          {:error, _reason} ->
+            agent = put_machine(agent, machine)
+            agent = StratState.set_status(agent, :failure)
+            {agent, []}
+        end
+
+      %{result: {:error, _reason}} ->
+        case Machine.transition(strat.machine, :error) do
+          {:ok, machine} ->
+            agent = put_machine(agent, machine)
+            handle_after_transition(agent)
+
+          {:error, _reason} ->
+            agent = StratState.set_status(agent, :failure)
+            {agent, []}
+        end
+    end
+  end
+
+  def cmd(agent, [%Jido.Instruction{action: :workflow_child_exit} | _rest], _ctx) do
+    # Child agent has exited — cleanup if needed
+    {agent, []}
+  end
+
   def cmd(agent, _instructions, _ctx) do
     {agent, []}
   end
@@ -153,6 +198,15 @@ defmodule Jido.Composer.Workflow.Strategy do
 
         {agent, [directive]}
 
+      %AgentNode{agent_module: agent_module, opts: opts} ->
+        directive = %Directive.SpawnAgent{
+          tag: strat.machine.status,
+          agent: agent_module,
+          opts: Map.new(opts)
+        }
+
+        {agent, [directive]}
+
       nil ->
         {agent, []}
     end
@@ -168,7 +222,14 @@ defmodule Jido.Composer.Workflow.Strategy do
         {:ok, node} = ActionNode.new(action_module)
         {state_name, node}
 
+      {state_name, {:agent, agent_module, opts}} ->
+        {:ok, node} = AgentNode.new(agent_module, opts: opts)
+        {state_name, node}
+
       {state_name, %ActionNode{} = node} ->
+        {state_name, node}
+
+      {state_name, %AgentNode{} = node} ->
         {state_name, node}
 
       {state_name, node} when is_struct(node) ->
