@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "uri": "https://api.anthropic.com/v1/messages",
+        "query_string": "",
+        "headers": {},
+        "body_type": "json",
+        "body_json": {}
+      },
+      "response": {
+        "status": 429,
+        "headers": {
+          "content-type": ["application/json"],
+          "retry-after": ["30"]
+        },
+        "body_type": "json",
+        "body_json": {
+          "type": "error",
+          "error": {
+            "type": "rate_limit_error",
+            "message": "Rate limit exceeded. Please retry after 30 seconds."
+          }
+        }
+      },
+      "recorded_at": "2026-03-05T10:00:03Z"
+    }
+  ]
+}

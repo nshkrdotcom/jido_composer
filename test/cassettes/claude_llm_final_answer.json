@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "uri": "https://api.anthropic.com/v1/messages",
+        "query_string": "",
+        "headers": {},
+        "body_type": "json",
+        "body_json": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": ["application/json"]
+        },
+        "body_type": "json",
+        "body_json": {
+          "id": "msg_01YFDUDYJgAACzvnptvVoYEL",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "The weather in Paris is 18°C and partly cloudy."
+            }
+          ],
+          "model": "claude-sonnet-4-20250514",
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 520,
+            "output_tokens": 42
+          }
+        }
+      },
+      "recorded_at": "2026-03-05T10:00:01Z"
+    }
+  ]
+}

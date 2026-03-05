@@ -1,0 +1,57 @@
+{
+  "version": "1.0",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "uri": "https://api.anthropic.com/v1/messages",
+        "query_string": "",
+        "headers": {},
+        "body_type": "json",
+        "body_json": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": ["application/json"]
+        },
+        "body_type": "json",
+        "body_json": {
+          "id": "msg_02XFDUDYJgAACzvnptvVoYEL",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "I'll check the weather and calculate that for you."
+            },
+            {
+              "type": "tool_use",
+              "id": "toolu_01B09q90qw90lq917835lhBR",
+              "name": "get_weather",
+              "input": {
+                "city": "Tokyo"
+              }
+            },
+            {
+              "type": "tool_use",
+              "id": "toolu_01C09q90qw90lq917835lhBR",
+              "name": "calculate",
+              "input": {
+                "expression": "42 * 17"
+              }
+            }
+          ],
+          "model": "claude-sonnet-4-20250514",
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 400,
+            "output_tokens": 95
+          }
+        }
+      },
+      "recorded_at": "2026-03-05T10:00:02Z"
+    }
+  ]
+}

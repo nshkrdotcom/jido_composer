@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "uri": "https://api.anthropic.com/v1/messages",
+        "query_string": "",
+        "headers": {},
+        "body_type": "json",
+        "body_json": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": ["application/json"]
+        },
+        "body_type": "json",
+        "body_json": {
+          "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "I'll look up the weather in Paris for you."
+            },
+            {
+              "type": "tool_use",
+              "id": "toolu_01A09q90qw90lq917835lhBR",
+              "name": "get_weather",
+              "input": {
+                "city": "Paris"
+              }
+            }
+          ],
+          "model": "claude-sonnet-4-20250514",
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 350,
+            "output_tokens": 65
+          }
+        }
+      },
+      "recorded_at": "2026-03-05T10:00:00Z"
+    }
+  ]
+}

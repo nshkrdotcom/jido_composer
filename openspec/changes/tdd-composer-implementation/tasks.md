@@ -74,11 +74,11 @@
 
 > **References**: `docs/design/orchestrator/llm-behaviour.md` — Complete generate/4 contract, response types, conversation ownership, req_options propagation, implementation requirements (7 items), testing approach. `docs/design/testing.md` — ReqCassette integration, streaming constraint, sensitive data filtering, req_options propagation path. `PLAN.md` Steps 8-10. `prototypes/learnings.md` — "Schema Conversion — Already Solved". `prototypes/test_llm_tool_calling.exs` — 5 tests against real Claude API.
 
-- [ ] 9.1 Write tests for LLM behaviour contract in `test/jido/composer/orchestrator/llm_test.exs`
-- [ ] 9.2 Implement `Jido.Composer.Orchestrator.LLM` behaviour in `lib/jido/composer/orchestrator/llm.ex`
-- [ ] 9.3 Record cassettes for ClaudeLLM: single tool call, multi-turn, final answer, API error
-- [ ] 9.4 Write cassette-driven tests for ClaudeLLM in `test/jido/composer/orchestrator/claude_llm_test.exs`
-- [ ] 9.5 Implement `Jido.Composer.Orchestrator.ClaudeLLM` in `lib/jido/composer/orchestrator/claude_llm.ex`
+- [x] 9.1 Write tests for LLM behaviour contract in `test/jido/composer/orchestrator/llm_test.exs`
+- [x] 9.2 Implement `Jido.Composer.Orchestrator.LLM` behaviour in `lib/jido/composer/orchestrator/llm.ex`
+- [x] 9.3 Record cassettes for ClaudeLLM: single tool call, multi-turn, final answer, API error
+- [x] 9.4 Write cassette-driven tests for ClaudeLLM in `test/jido/composer/orchestrator/claude_llm_test.exs`
+- [x] 9.5 Implement `Jido.Composer.Orchestrator.ClaudeLLM` in `lib/jido/composer/orchestrator/claude_llm.ex`
 
 ## 10. AgentTool Adapter
 
