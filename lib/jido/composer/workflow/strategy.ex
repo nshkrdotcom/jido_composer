@@ -290,7 +290,7 @@ defmodule Jido.Composer.Workflow.Strategy do
         directive = %Directive.SpawnAgent{
           tag: strat.machine.status,
           agent: agent_module,
-          opts: Map.new(opts)
+          opts: Map.new(opts) |> Map.put(:context, strat.machine.context)
         }
 
         {agent, [directive]}

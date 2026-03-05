@@ -122,6 +122,54 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
     end
   end
 
+  describe "node options preservation" do
+    defmodule OptionsOrchestrator do
+      use Jido.Composer.Orchestrator,
+        name: "options_orchestrator",
+        llm: Jido.Composer.TestSupport.MockLLM,
+        nodes: [
+          Jido.Composer.TestActions.AddAction,
+          {Jido.Composer.TestActions.EchoAction,
+           description: "Custom echo", requires_approval: true}
+        ]
+    end
+
+    test "node options other than requires_approval are preserved" do
+      opts = OptionsOrchestrator.strategy_opts()
+      # Nodes should carry their extra options for the strategy to use
+      nodes = opts[:nodes]
+
+      echo_entry =
+        Enum.find(nodes, fn
+          {mod, _opts} when is_atom(mod) -> mod == Jido.Composer.TestActions.EchoAction
+          mod when is_atom(mod) -> mod == Jido.Composer.TestActions.EchoAction
+          _ -> false
+        end)
+
+      assert echo_entry != nil
+      # Options like description should be preserved as a tuple
+      assert {Jido.Composer.TestActions.EchoAction, opts_list} = echo_entry
+      assert Keyword.get(opts_list, :description) == "Custom echo"
+    end
+  end
+
+  describe "HITL DSL options" do
+    defmodule HITLOrchestrator do
+      use Jido.Composer.Orchestrator,
+        name: "hitl_orchestrator",
+        llm: Jido.Composer.TestSupport.MockLLM,
+        nodes: [
+          {Jido.Composer.TestActions.AddAction, requires_approval: true}
+        ],
+        rejection_policy: :cancel_siblings
+    end
+
+    test "rejection_policy is passed to strategy opts" do
+      opts = HITLOrchestrator.strategy_opts()
+      assert opts[:rejection_policy] == :cancel_siblings
+    end
+  end
+
   describe "gated_nodes via DSL" do
     test "requires_approval metadata is passed through to strategy opts" do
       opts = GatedOrchestrator.strategy_opts()

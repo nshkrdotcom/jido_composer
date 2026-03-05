@@ -214,6 +214,22 @@ defmodule Jido.Composer.Node.HumanNodeTest do
     end
   end
 
+  describe "Node behaviour" do
+    test "HumanNode declares Node behaviour" do
+      behaviours =
+        HumanNode.__info__(:attributes)
+        |> Keyword.get_values(:behaviour)
+        |> List.flatten()
+
+      assert Jido.Composer.Node in behaviours
+    end
+
+    test "run/3 returns {:ok, context, :suspend}" do
+      {:ok, node} = HumanNode.new(name: "n", description: "d", prompt: "p?")
+      assert {:ok, _ctx, :suspend} = HumanNode.run(node, %{}, [])
+    end
+  end
+
   describe "metadata" do
     test "name/1 returns the configured name" do
       {:ok, node} =

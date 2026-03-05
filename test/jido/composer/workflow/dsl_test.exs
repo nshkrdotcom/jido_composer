@@ -70,6 +70,84 @@ defmodule Jido.Composer.Workflow.DSLTest do
     end
   end
 
+  describe "node auto-detection" do
+    defmodule ActionWithOptsWorkflow do
+      use Jido.Composer.Workflow,
+        name: "action_opts_workflow",
+        nodes: %{
+          step_a: {AddAction, [timeout: 5000]},
+          step_b: MultiplyAction
+        },
+        transitions: %{
+          {:step_a, :ok} => :step_b,
+          {:step_b, :ok} => :done,
+          {:_, :error} => :failed
+        },
+        initial: :step_a
+    end
+
+    test "action module with opts is wrapped as action, not agent" do
+      opts = ActionWithOptsWorkflow.strategy_opts()
+      # An action module with opts should auto-detect as action
+      assert {:action, AddAction} = opts[:nodes][:step_a]
+    end
+
+    test "agent module is detected and wrapped as agent" do
+      # Modules responding to __agent_metadata__/0 should wrap as agent
+      nodes_raw = %{step: {Jido.Composer.TestAgents.EchoAgent, []}}
+      wrapped = Jido.Composer.Workflow.DSL.__wrap_nodes__(nodes_raw)
+      assert {:agent, Jido.Composer.TestAgents.EchoAgent, []} = wrapped[:step]
+    end
+  end
+
+  describe "compile-time warnings" do
+    test "warns about unreachable states" do
+      warnings =
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          defmodule UnreachableWorkflow do
+            use Jido.Composer.Workflow,
+              name: "unreachable",
+              nodes: %{
+                step_a: AddAction,
+                step_b: MultiplyAction,
+                orphan: AddAction
+              },
+              transitions: %{
+                {:step_a, :ok} => :step_b,
+                {:step_b, :ok} => :done,
+                {:_, :error} => :failed
+              },
+              initial: :step_a
+          end
+        end)
+
+      assert warnings =~ "orphan"
+      assert warnings =~ "unreachable"
+    end
+
+    test "warns about non-terminal states with no outgoing transitions" do
+      warnings =
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          defmodule DeadEndWorkflow do
+            use Jido.Composer.Workflow,
+              name: "dead_end",
+              nodes: %{
+                step_a: AddAction,
+                step_b: MultiplyAction
+              },
+              transitions: %{
+                {:step_a, :ok} => :step_b,
+                {:_, :error} => :failed
+              },
+              initial: :step_a
+          end
+        end)
+
+      assert warnings =~ "step_b"
+      assert warnings =~ "no outgoing transition"
+    end
+  end
+
   describe "compile-time validation" do
     test "rejects initial state not in nodes" do
       assert_raise CompileError, fn ->

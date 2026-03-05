@@ -19,7 +19,7 @@ classDiagram
 
     class Node {
         <<behaviour>>
-        +run(context, opts)
+        +run(node, context, opts)
     }
 
     Machine --> "0..*" Node : binds states to

@@ -151,14 +151,26 @@ defmodule Jido.Composer.Workflow.DSL do
   def __wrap_nodes__(nodes) when is_map(nodes) do
     Map.new(nodes, fn
       {state, {module, opts}} when is_atom(module) and is_list(opts) ->
-        {state, {:agent, module, opts}}
+        if agent_module?(module) do
+          {state, {:agent, module, opts}}
+        else
+          {state, {:action, module}}
+        end
 
       {state, module} when is_atom(module) ->
-        {state, {:action, module}}
+        if agent_module?(module) do
+          {state, {:agent, module, []}}
+        else
+          {state, {:action, module}}
+        end
 
       {state, other} ->
         {state, other}
     end)
+  end
+
+  defp agent_module?(module) do
+    Code.ensure_loaded?(module) && function_exported?(module, :__agent_metadata__, 0)
   end
 
   @doc false
@@ -171,6 +183,7 @@ defmodule Jido.Composer.Workflow.DSL do
       |> Map.values()
       |> Enum.uniq()
 
+    # Errors: transition targets must be defined nodes or terminal states
     for target <- transition_targets do
       unless target in node_states or MapSet.member?(terminals, target) do
         raise CompileError,
@@ -185,6 +198,56 @@ defmodule Jido.Composer.Workflow.DSL do
         description: "Workflow initial state #{inspect(initial)} is not defined in nodes"
     end
 
+    # Warnings: unreachable states (not reachable from initial via transitions)
+    reachable = reachable_states(initial, transitions)
+
+    for state <- node_states do
+      unless state in reachable do
+        IO.warn(
+          "Workflow state #{inspect(state)} is unreachable from initial state #{inspect(initial)}"
+        )
+      end
+    end
+
+    # Warnings: non-terminal states with no outgoing transitions (dead ends)
+    # A state has outgoing transitions if there is an explicit {state, _} entry
+    # or a wildcard {:_, _} entry. However, wildcard-only coverage still means
+    # the state has no explicit success path, so we only count explicit sources.
+    explicit_sources =
+      transitions
+      |> Map.keys()
+      |> Enum.map(fn {state, _outcome} -> state end)
+      |> Enum.reject(&(&1 == :_))
+      |> MapSet.new()
+
+    for state <- node_states do
+      unless MapSet.member?(terminals, state) or MapSet.member?(explicit_sources, state) do
+        IO.warn(
+          "Workflow state #{inspect(state)} has no outgoing transitions and is not a terminal state"
+        )
+      end
+    end
+
     :ok
+  end
+
+  defp reachable_states(initial, transitions) do
+    do_reachable([initial], MapSet.new([initial]), transitions)
+  end
+
+  defp do_reachable([], visited, _transitions), do: MapSet.to_list(visited)
+
+  defp do_reachable([current | rest], visited, transitions) do
+    # Find all states reachable from current (including via wildcard source :_)
+    next_states =
+      transitions
+      |> Enum.filter(fn {{source, _outcome}, _target} ->
+        source == current or source == :_
+      end)
+      |> Enum.map(fn {_key, target} -> target end)
+      |> Enum.reject(&MapSet.member?(visited, &1))
+
+    new_visited = Enum.reduce(next_states, visited, &MapSet.put(&2, &1))
+    do_reachable(rest ++ next_states, new_visited, transitions)
   end
 end

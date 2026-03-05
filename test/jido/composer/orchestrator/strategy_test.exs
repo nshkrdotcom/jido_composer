@@ -361,6 +361,86 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
     end
   end
 
+  describe "dynamic approval_policy" do
+    test "approval_policy function gates tool calls dynamically" do
+      tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 100.0, "amount" => 50.0}}
+      MockLLM.setup([{:tool_calls, [tool_call]}])
+
+      # Policy: require approval when amount > 10
+      policy = fn call, _context ->
+        amount = call.arguments["amount"] || call.arguments[:amount] || 0
+        if amount > 10, do: :require_approval, else: :proceed
+      end
+
+      strategy_opts = [
+        nodes: [AddAction, EchoAction],
+        llm_module: MockLLM,
+        system_prompt: "test",
+        max_iterations: 10,
+        req_options: [],
+        approval_policy: policy
+      ]
+
+      agent = TestOrchestratorAgent.new()
+      ctx = %{strategy_opts: strategy_opts}
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add big"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir, agent)
+
+      {agent, directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      state = get_state(agent)
+      # Should be gated by the dynamic policy
+      assert state.status in [:awaiting_approval, :awaiting_tools_and_approval]
+      # Should have a SuspendForHuman directive
+      suspend_directives =
+        Enum.filter(directives, &match?(%Jido.Composer.Directive.SuspendForHuman{}, &1))
+
+      assert length(suspend_directives) == 1
+    end
+
+    test "approval_policy :proceed allows tool call through" do
+      tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 1.0, "amount" => 1.0}}
+      MockLLM.setup([{:tool_calls, [tool_call]}, {:final_answer, "2.0"}])
+
+      # Policy: require approval when amount > 10 (this should pass through)
+      policy = fn call, _context ->
+        amount = call.arguments["amount"] || call.arguments[:amount] || 0
+        if amount > 10, do: :require_approval, else: :proceed
+      end
+
+      strategy_opts = [
+        nodes: [AddAction, EchoAction],
+        llm_module: MockLLM,
+        system_prompt: "test",
+        max_iterations: 10,
+        req_options: [],
+        approval_policy: policy
+      ]
+
+      agent = TestOrchestratorAgent.new()
+      ctx = %{strategy_opts: strategy_opts}
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add small"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir, agent)
+
+      {agent, directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      state = get_state(agent)
+      assert state.status == :awaiting_tools
+      # Should be a RunInstruction, not a SuspendForHuman
+      assert Enum.all?(directives, &match?(%Jido.Agent.Directive.RunInstruction{}, &1))
+    end
+  end
+
   describe "signal_routes/1" do
     test "returns routes for orchestrator signals" do
       routes = Strategy.signal_routes(%{})
@@ -379,6 +459,42 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
     end
   end
 
+  describe "snapshot/2 with HITL" do
+    test "snapshot includes HITL details when awaiting approval" do
+      MockLLM.setup([
+        {:tool_calls,
+         [%{id: "call_1", name: "add", arguments: %{"value" => 1.0, "amount" => 2.0}}]}
+      ])
+
+      strategy_opts = [
+        nodes: [AddAction, EchoAction],
+        llm_module: MockLLM,
+        system_prompt: "test",
+        max_iterations: 10,
+        req_options: [],
+        gated_nodes: ["add"]
+      ]
+
+      agent = TestOrchestratorAgent.new()
+      ctx = %{strategy_opts: strategy_opts}
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir, agent)
+
+      {agent, _directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      snap = Strategy.snapshot(agent, ctx())
+      assert snap.status == :awaiting_approval
+      refute snap.done?
+      assert snap.details[:reason] == :awaiting_approval
+      assert is_binary(snap.details[:request_id])
+    end
+  end
+
   describe "LLM error handling" do
     test "sets error status on LLM error" do
       MockLLM.setup([{:error, "API timeout"}])
@@ -394,6 +510,25 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
       state = get_state(agent)
       assert state.status == :error
+    end
+  end
+
+  describe "persistence readiness" do
+    test "strategy state is serializable via :erlang.term_to_binary" do
+      MockLLM.setup([{:final_answer, "test"}])
+      agent = init_agent()
+
+      {agent, _directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Hi"})], ctx())
+
+      # Strategy state must be serializable (no PIDs, refs, etc.)
+      strat_state = get_state(agent)
+      binary = :erlang.term_to_binary(strat_state)
+      restored = :erlang.binary_to_term(binary)
+
+      assert restored.status == strat_state.status
+      assert restored.query == strat_state.query
+      assert restored.iteration == strat_state.iteration
     end
   end
 

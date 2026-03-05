@@ -20,12 +20,16 @@ for driving [Workflow](../workflow/README.md) transitions.
 
 ## Callbacks
 
-| Callback        | Returns            | Purpose                                              |
-| --------------- | ------------------ | ---------------------------------------------------- |
-| `run/2`         | result (see above) | Execute the node's logic                             |
-| `name/0`        | `String.t()`       | Human-readable identifier                            |
-| `description/0` | `String.t()`       | What this node does (used in tool descriptions)      |
-| `schema/0`      | keyword \| nil     | Input parameter schema (NimbleOptions or Zoi format) |
+| Callback        | Returns            | Purpose                                            |
+| --------------- | ------------------ | -------------------------------------------------- |
+| `run/3`         | result (see above) | Execute the node's logic (struct, context, opts)   |
+| `name/1`        | `String.t()`       | Human-readable identifier (receives struct)        |
+| `description/1` | `String.t()`       | What this node does (receives struct)              |
+| `schema/1`      | keyword \| nil     | Input parameter schema (receives struct, optional) |
+
+All callbacks receive the node struct as first argument, enabling per-instance
+configuration (e.g., different options for the same action module in different
+workflow states).
 
 ## Node Types
 
@@ -33,10 +37,10 @@ for driving [Workflow](../workflow/README.md) transitions.
 classDiagram
     class Node {
         <<behaviour>>
-        +run(context, opts) result
-        +name() String
-        +description() String
-        +schema() keyword | nil
+        +run(node, context, opts) result
+        +name(node) String
+        +description(node) String
+        +schema(node) keyword | nil
     }
 
     class ActionNode {

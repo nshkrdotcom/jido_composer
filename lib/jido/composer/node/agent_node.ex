@@ -14,6 +14,8 @@ defmodule Jido.Composer.Node.AgentNode do
   layer (Machine/Strategy), not the node.
   """
 
+  @behaviour Jido.Composer.Node
+
   @valid_modes [:sync, :async, :streaming]
   @default_timeout 30_000
 
@@ -53,12 +55,21 @@ defmodule Jido.Composer.Node.AgentNode do
     end
   end
 
+  @impl true
+  @spec run(t(), map(), keyword()) :: Jido.Composer.Node.result()
+  def run(%__MODULE__{}, _context, _opts \\ []) do
+    {:error, :not_directly_runnable}
+  end
+
+  @impl true
   @spec name(t()) :: String.t()
   def name(%__MODULE__{agent_module: mod}), do: mod.name()
 
+  @impl true
   @spec description(t()) :: String.t()
   def description(%__MODULE__{agent_module: mod}), do: mod.description()
 
+  @impl true
   @spec schema(t()) :: term()
   def schema(%__MODULE__{agent_module: mod}), do: mod.schema()
 

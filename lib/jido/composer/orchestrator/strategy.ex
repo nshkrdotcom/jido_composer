@@ -29,6 +29,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     tools = Enum.map(nodes, fn {_name, node} -> AgentTool.to_tool(node) end)
 
     gated_node_names = MapSet.new(opts[:gated_nodes] || [])
+    approval_policy = opts[:approval_policy]
 
     agent =
       StratState.put(agent, %{
@@ -48,6 +49,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         result: nil,
         query: nil,
         gated_node_names: gated_node_names,
+        approval_policy: approval_policy,
+        rejection_policy: opts[:rejection_policy] || :continue_siblings,
         gated_calls: %{}
       })
 
@@ -265,14 +268,32 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     strat = StratState.get(agent, %{})
     status = Map.get(strat, :status, :idle)
 
+    details = %{
+      iteration: Map.get(strat, :iteration, 0),
+      context: Map.get(strat, :context, %{})
+    }
+
+    details =
+      case {status, Map.get(strat, :gated_calls, %{})} do
+        {s, gated}
+        when s in [:awaiting_approval, :awaiting_tools_and_approval] and gated != %{} ->
+          [{request_id, %{request: request}} | _] = Map.to_list(gated)
+
+          Map.merge(details, %{
+            reason: :awaiting_approval,
+            request_id: request_id,
+            node_name: Map.get(request.metadata, :tool_name)
+          })
+
+        _ ->
+          details
+      end
+
     %Jido.Agent.Strategy.Snapshot{
       status: status,
       done?: status in [:completed, :error],
       result: Map.get(strat, :result),
-      details: %{
-        iteration: Map.get(strat, :iteration, 0),
-        context: Map.get(strat, :context, %{})
-      }
+      details: details
     }
   end
 
@@ -322,7 +343,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     else
       {ungated, gated} =
         Enum.split_with(calls, fn call ->
-          not MapSet.member?(state.gated_node_names, call.name)
+          not requires_approval?(call, state)
         end)
 
       ungated_ids = Enum.map(ungated, & &1.id)
@@ -461,32 +482,91 @@ defmodule Jido.Composer.Orchestrator.Strategy do
   end
 
   defp handle_approval_rejection(agent, request_id, call, reason) do
-    # Inject synthetic rejection result
-    tool_result =
-      AgentTool.to_tool_result(
-        call.id,
-        call.name,
-        {:error, "REJECTED by human reviewer. Reason: #{reason}. Choose a different approach."}
-      )
+    state = StratState.get(agent)
 
-    scope_key = String.to_existing_atom(call.name)
-    rejection_data = %{error: "REJECTED: #{reason}"}
+    case state.rejection_policy do
+      :abort_iteration ->
+        agent =
+          StratState.update(agent, fn s ->
+            %{
+              s
+              | status: :error,
+                result: "Iteration aborted: tool #{call.name} rejected. Reason: #{reason}",
+                gated_calls: %{},
+                pending_tool_calls: []
+            }
+          end)
 
-    agent =
-      StratState.update(agent, fn s ->
-        new_gated = Map.delete(s.gated_calls, request_id)
-        new_completed = s.completed_tool_results ++ [tool_result]
-        new_context = deep_merge(s.context, %{scope_key => rejection_data})
+        {agent, []}
 
-        %{
-          s
-          | gated_calls: new_gated,
-            completed_tool_results: new_completed,
-            context: new_context
-        }
-      end)
+      :cancel_siblings ->
+        # Cancel all pending tool calls with synthetic results
+        cancel_results =
+          Enum.map(state.pending_tool_calls, fn pending_id ->
+            AgentTool.to_tool_result(
+              pending_id,
+              "cancelled",
+              {:error, "Cancelled due to sibling rejection"}
+            )
+          end)
 
-    check_all_tools_done(agent)
+        rejection_result =
+          AgentTool.to_tool_result(
+            call.id,
+            call.name,
+            {:error,
+             "REJECTED by human reviewer. Reason: #{reason}. Choose a different approach."}
+          )
+
+        scope_key = String.to_existing_atom(call.name)
+        rejection_data = %{error: "REJECTED: #{reason}"}
+
+        agent =
+          StratState.update(agent, fn s ->
+            new_gated = Map.delete(s.gated_calls, request_id)
+            new_completed = s.completed_tool_results ++ cancel_results ++ [rejection_result]
+            new_context = deep_merge(s.context, %{scope_key => rejection_data})
+
+            %{
+              s
+              | gated_calls: new_gated,
+                completed_tool_results: new_completed,
+                context: new_context,
+                pending_tool_calls: []
+            }
+          end)
+
+        check_all_tools_done(agent)
+
+      _continue_siblings ->
+        # Default: inject synthetic rejection result, let siblings finish
+        tool_result =
+          AgentTool.to_tool_result(
+            call.id,
+            call.name,
+            {:error,
+             "REJECTED by human reviewer. Reason: #{reason}. Choose a different approach."}
+          )
+
+        scope_key = String.to_existing_atom(call.name)
+        rejection_data = %{error: "REJECTED: #{reason}"}
+
+        agent =
+          StratState.update(agent, fn s ->
+            new_gated = Map.delete(s.gated_calls, request_id)
+            new_completed = s.completed_tool_results ++ [tool_result]
+            new_context = deep_merge(s.context, %{scope_key => rejection_data})
+
+            %{
+              s
+              | gated_calls: new_gated,
+                completed_tool_results: new_completed,
+                context: new_context
+            }
+          end)
+
+        check_all_tools_done(agent)
+    end
   end
 
   defp check_all_tools_done(agent) do
@@ -508,8 +588,30 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     end
   end
 
+  defp requires_approval?(call, state) do
+    # Static gating by name
+    if MapSet.member?(state.gated_node_names, call.name) do
+      true
+    else
+      # Dynamic policy function
+      case state.approval_policy do
+        nil -> false
+        policy when is_function(policy, 2) -> policy.(call, state.context) == :require_approval
+      end
+    end
+  end
+
   defp build_nodes(modules) when is_list(modules) do
     Map.new(modules, fn
+      {mod, opts} when is_atom(mod) and is_list(opts) ->
+        if agent_module?(mod) do
+          {:ok, node} = AgentNode.new(mod, opts)
+          {AgentNode.name(node), node}
+        else
+          {:ok, node} = ActionNode.new(mod, opts)
+          {ActionNode.name(node), node}
+        end
+
       mod when is_atom(mod) ->
         if agent_module?(mod) do
           {:ok, node} = AgentNode.new(mod)

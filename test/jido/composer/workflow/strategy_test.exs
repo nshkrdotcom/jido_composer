@@ -260,6 +260,64 @@ defmodule Jido.Composer.Workflow.StrategyTest do
     end
   end
 
+  describe "cmd/3 - AgentNode dispatch" do
+    defp init_agent_node_workflow do
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{
+            prepare: {:action, Jido.Composer.TestActions.AddAction},
+            delegate: {:agent, Jido.Composer.TestAgents.EchoAgent, []}
+          },
+          transitions: %{
+            {:prepare, :ok} => :delegate,
+            {:delegate, :ok} => :done,
+            {:_, :error} => :failed
+          },
+          initial: :prepare
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _directives} = Strategy.init(agent, ctx)
+      {agent, ctx}
+    end
+
+    test "SpawnAgent directive includes machine context for child" do
+      {agent, ctx} = init_agent_node_workflow()
+
+      # Start workflow
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [%Jido.Instruction{action: :workflow_start, params: %{value: 1.0, amount: 2.0}}],
+          ctx
+        )
+
+      # Simulate successful result from prepare node -> transitions to :delegate (AgentNode)
+      result_params = %{
+        status: :ok,
+        result: %{result: 3.0},
+        instruction: %Jido.Instruction{action: Jido.Composer.TestActions.AddAction, params: %{}},
+        effects: [],
+        meta: %{}
+      }
+
+      {_agent, directives} =
+        Strategy.cmd(
+          agent,
+          [%Jido.Instruction{action: :workflow_node_result, params: result_params}],
+          ctx
+        )
+
+      assert [%Directive.SpawnAgent{} = spawn] = directives
+      assert spawn.agent == Jido.Composer.TestAgents.EchoAgent
+      # Context should be included in opts so the child receives it
+      assert spawn.opts[:context] != nil
+      assert spawn.opts[:context][:value] == 1.0
+    end
+  end
+
   describe "signal_routes/1" do
     test "declares workflow signal routes" do
       routes = Strategy.signal_routes(%{})
@@ -332,6 +390,28 @@ defmodule Jido.Composer.Workflow.StrategyTest do
       snap = Strategy.snapshot(agent, ctx)
       assert snap.status == :success
       assert snap.done?
+    end
+  end
+
+  describe "persistence readiness" do
+    test "strategy state is serializable via :erlang.term_to_binary" do
+      {agent, ctx} = init_agent()
+
+      # Start workflow
+      instructions = [
+        %Jido.Instruction{action: :workflow_start, params: %{value: 1.0, amount: 2.0}}
+      ]
+
+      {agent, _directives} = Strategy.cmd(agent, instructions, ctx)
+
+      # Strategy state must be serializable (no PIDs, refs, etc.)
+      strat_state = StratState.get(agent)
+      binary = :erlang.term_to_binary(strat_state)
+      restored = :erlang.binary_to_term(binary)
+
+      assert restored.machine.status == strat_state.machine.status
+      assert restored.machine.context == strat_state.machine.context
+      assert restored.status == strat_state.status
     end
   end
 end

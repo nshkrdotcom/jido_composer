@@ -76,6 +76,23 @@ defmodule Jido.Composer.Orchestrator.AgentToolTest do
 
       assert context == %{}
     end
+
+    test "handles LLM-generated string keys that don't match existing atoms" do
+      # LLM might generate arbitrary argument names not pre-loaded as atoms
+      # Use a key guaranteed to not exist as an atom yet
+      novel_key = "xyzzy_#{System.unique_integer([:positive])}_novel"
+
+      tool_call = %{
+        id: "call_novel",
+        name: "action",
+        arguments: %{novel_key => "value"}
+      }
+
+      # Should not crash with ArgumentError
+      context = AgentTool.to_context(tool_call)
+      # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+      assert context[String.to_atom(novel_key)] == "value"
+    end
   end
 
   describe "to_tool_result/3" do

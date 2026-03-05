@@ -34,6 +34,7 @@ defmodule Jido.Composer.Node.ActionNode do
   def run(%__MODULE__{action_module: action_module}, context, opts \\ []) do
     case Jido.Exec.run(action_module, context, opts) do
       {:ok, result} -> {:ok, result}
+      {:ok, result, outcome} -> {:ok, result, outcome}
       {:error, reason} -> {:error, reason}
     end
   end

@@ -267,6 +267,23 @@ defmodule Jido.Composer.Node.FanOutNodeTest do
     end
   end
 
+  describe "Node behaviour" do
+    test "FanOutNode declares Node behaviour" do
+      behaviours =
+        FanOutNode.__info__(:attributes)
+        |> Keyword.get_values(:behaviour)
+        |> List.flatten()
+
+      assert Jido.Composer.Node in behaviours
+    end
+
+    test "run/3 is implemented and returns {:ok, map}" do
+      {:ok, add_node} = ActionNode.new(AddAction)
+      {:ok, fan_out} = FanOutNode.new(name: "test", branches: [add: add_node])
+      assert {:ok, %{add: %{result: 3.0}}} = FanOutNode.run(fan_out, %{value: 1.0, amount: 2.0})
+    end
+  end
+
   describe "metadata" do
     test "name/1 returns the configured name" do
       {:ok, add_node} = ActionNode.new(AddAction)

@@ -59,8 +59,22 @@ defmodule Jido.Composer.Orchestrator.AgentTool do
   @spec to_context(Jido.Composer.Orchestrator.LLM.tool_call()) :: map()
   def to_context(%{arguments: arguments}) do
     Map.new(arguments, fn
-      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
-      {k, v} when is_atom(k) -> {k, v}
+      {k, v} when is_binary(k) ->
+        # Tool call keys are bounded by tool schemas (from Node definitions),
+        # not arbitrary user input. Try existing atom first; fall back for
+        # schema-defined keys not yet loaded as atoms in the VM.
+        key =
+          try do
+            String.to_existing_atom(k)
+          rescue
+            # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+            ArgumentError -> String.to_atom(k)
+          end
+
+        {key, v}
+
+      {k, v} when is_atom(k) ->
+        {k, v}
     end)
   end
 

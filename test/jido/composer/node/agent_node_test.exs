@@ -114,6 +114,22 @@ defmodule Jido.Composer.Node.AgentNodeTest do
     end
   end
 
+  describe "Node behaviour" do
+    test "AgentNode declares Node behaviour" do
+      behaviours =
+        AgentNode.__info__(:attributes)
+        |> Keyword.get_values(:behaviour)
+        |> List.flatten()
+
+      assert Jido.Composer.Node in behaviours
+    end
+
+    test "run/3 returns {:error, :not_directly_runnable} for AgentNodes" do
+      {:ok, node} = AgentNode.new(EchoAgent)
+      assert {:error, :not_directly_runnable} = AgentNode.run(node, %{}, [])
+    end
+  end
+
   describe "timeout defaults" do
     test "default timeout is 30_000 when not specified in opts" do
       {:ok, node} = AgentNode.new(EchoAgent)

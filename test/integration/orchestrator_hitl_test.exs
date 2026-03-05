@@ -21,6 +21,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
   defp init_agent(opts) do
     gated_nodes = Keyword.get(opts, :gated_nodes, [])
+    rejection_policy = Keyword.get(opts, :rejection_policy)
 
     nodes =
       Keyword.get(opts, :nodes, [
@@ -28,13 +29,14 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
         Jido.Composer.TestActions.EchoAction
       ])
 
-    strategy_opts = [
-      nodes: nodes,
-      llm_module: MockLLM,
-      system_prompt: "You are a helpful assistant.",
-      max_iterations: 10,
-      gated_nodes: gated_nodes
-    ]
+    strategy_opts =
+      [
+        nodes: nodes,
+        llm_module: MockLLM,
+        system_prompt: "You are a helpful assistant.",
+        max_iterations: 10,
+        gated_nodes: gated_nodes
+      ] ++ if(rejection_policy, do: [rejection_policy: rejection_policy], else: [])
 
     agent = HITLOrchestratorAgent.new()
     ctx = %{strategy_opts: strategy_opts}
@@ -270,6 +272,87 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       assert strat.status == :completed
       assert strat.context[:add][:result] == 8.0
       assert strat.context[:echo][:echoed] == "hello"
+    end
+  end
+
+  describe "rejection policy :cancel_siblings" do
+    test "cancels in-flight tools when a gated tool is rejected" do
+      agent = init_agent(gated_nodes: ["add"], rejection_policy: :cancel_siblings)
+
+      calls = [
+        %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}},
+        %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}}
+      ]
+
+      MockLLM.setup([
+        {:tool_calls, calls},
+        {:final_answer, "Handled cancellation"}
+      ])
+
+      {agent, directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Use both"})], %{})
+
+      # Run only LLM directive, don't execute tool directives yet
+      {agent, _remaining} = execute_orchestrator(agent, directives)
+
+      strat = StratState.get(agent)
+      [{request_id, _}] = Map.to_list(strat.gated_calls)
+
+      # Reject the gated call — should cancel siblings
+      {:ok, response} =
+        ApprovalResponse.new(
+          request_id: request_id,
+          decision: :rejected,
+          comment: "Cancelled"
+        )
+
+      {agent, _directives} =
+        Strategy.cmd(agent, [make_instruction(:hitl_response, Map.from_struct(response))], %{})
+
+      strat = StratState.get(agent)
+
+      # With cancel_siblings: pending tools should be cleared and
+      # synthetic results generated for all
+      assert strat.pending_tool_calls == []
+      # Should proceed to LLM with results (rejection + cancellation)
+      assert strat.status == :awaiting_llm
+      # Completed results should have entries for both tools
+      assert strat.completed_tool_results != []
+    end
+  end
+
+  describe "rejection policy :abort_iteration" do
+    test "aborts entirely when a gated tool is rejected" do
+      agent = init_agent(gated_nodes: ["add"], rejection_policy: :abort_iteration)
+
+      calls = [
+        %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}},
+        %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}}
+      ]
+
+      MockLLM.setup([{:tool_calls, calls}])
+
+      {agent, directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Use both"})], %{})
+
+      {agent, _remaining} = execute_orchestrator(agent, directives)
+
+      strat = StratState.get(agent)
+      [{request_id, _}] = Map.to_list(strat.gated_calls)
+
+      {:ok, response} =
+        ApprovalResponse.new(
+          request_id: request_id,
+          decision: :rejected,
+          comment: "Abort"
+        )
+
+      {agent, _directives} =
+        Strategy.cmd(agent, [make_instruction(:hitl_response, Map.from_struct(response))], %{})
+
+      strat = StratState.get(agent)
+      assert strat.status == :error
+      assert strat.result =~ "abort"
     end
   end
 

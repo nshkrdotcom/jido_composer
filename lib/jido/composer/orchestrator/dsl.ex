@@ -26,6 +26,7 @@ defmodule Jido.Composer.Orchestrator.DSL do
     system_prompt = Keyword.get(opts, :system_prompt, nil)
     max_iterations = Keyword.get(opts, :max_iterations, 10)
     req_options = Keyword.get(opts, :req_options, [])
+    rejection_policy = Keyword.get(opts, :rejection_policy)
 
     orchestrator_routes = Jido.Composer.Orchestrator.Strategy.signal_routes(%{})
 
@@ -47,6 +48,10 @@ defmodule Jido.Composer.Orchestrator.DSL do
                               ] ++
                                 if(@__orch_gated_nodes__ != [],
                                   do: [gated_nodes: @__orch_gated_nodes__],
+                                  else: []
+                                ) ++
+                                if(unquote(rejection_policy) != nil,
+                                  do: [rejection_policy: unquote(rejection_policy)],
                                   else: []
                                 )
 
@@ -76,12 +81,13 @@ defmodule Jido.Composer.Orchestrator.DSL do
   def __parse_nodes__(nodes) when is_list(nodes) do
     Enum.reduce(nodes, {[], []}, fn
       {mod, opts}, {plain, gated} when is_atom(mod) and is_list(opts) ->
-        if Keyword.get(opts, :requires_approval, false) do
-          name = get_node_name(mod)
-          {[mod | plain], [name | gated]}
-        else
-          {[mod | plain], gated}
-        end
+        name = get_node_name(mod)
+        is_gated = Keyword.get(opts, :requires_approval, false)
+        remaining_opts = Keyword.delete(opts, :requires_approval)
+
+        node_entry = if remaining_opts == [], do: mod, else: {mod, remaining_opts}
+        gated = if is_gated, do: [name | gated], else: gated
+        {[node_entry | plain], gated}
 
       mod, {plain, gated} when is_atom(mod) ->
         {[mod | plain], gated}
