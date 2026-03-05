@@ -209,8 +209,8 @@
 
 > **References**: `docs/design/hitl/nested-propagation.md` — Reference scenario (OuterWorkflow -> InnerOrchestrator with HITL gate), parent isolation, concurrent work during child pause, cascading checkpoint/resume, cascading cancellation, multiple HITL points. `docs/design/composition.md` — "HITL Across Composition Boundaries" section. `prototypes/test_hitl_assumptions.exs` — nested HITL assumption tests.
 
-- [ ] 25.1 Write tests in `test/integration/hitl_integration_test.exs` (child suspend isolation, cascading checkpoint, top-down resume)
-- [ ] 25.2 Fix any issues discovered during nested HITL testing
+- [x] 25.1 Write tests in `test/integration/hitl_integration_test.exs` (child suspend isolation, cascading checkpoint, top-down resume)
+- [x] 25.2 Fix any issues discovered during nested HITL testing
 
 ---
 
