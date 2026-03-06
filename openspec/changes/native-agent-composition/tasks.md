@@ -63,18 +63,18 @@
 
 **Depends on**: Phase 1 (AgentNode.run/3 must work for agent branches)
 
-- [ ] 4.1 Write unit tests in `test/jido/composer/directive/fan_out_branch_test.exs` (NEW) — struct with instruction, struct with spawn_agent, instruction/spawn_agent mutual exclusivity
-- [ ] 4.2 Write Workflow strategy tests in `test/jido/composer/workflow/strategy_test.exs` — dispatch FanOutNode emits FanOutBranch directives, `fan_out_branch_result` tracks completion, fan_out completes when all branches done (merge + transition), fail_fast cancels on error, collect_partial continues on error, `max_concurrency` limits dispatch, queued branches dispatch as slots open
-- [ ] 4.3 Write DSL tests in `test/jido/composer/workflow/dsl_test.exs` — `run_sync` handles FanOutBranch directives via Task.async_stream
-- [ ] 4.4 Write integration tests in `test/integration/workflow_fan_out_test.exs` — FanOut with mixed ActionNode + AgentNode branches, FanOut with orchestrator AgentNode branch (LLMStub), FanOut fail_fast with agent branch failure
-- [ ] 4.5 Write e2e test — `test/e2e/e2e_test.exs`: FanOut with mixed agent and action branches (LLMStub plug mode)
-- [ ] 4.6 Implement `Jido.Composer.Directive.FanOutBranch` in `lib/jido/composer/directive/fan_out_branch.ex` (NEW) — struct with `fan_out_id`, `branch_name`, `instruction`, `spawn_agent`, `result_action`
-- [ ] 4.7 Refactor `lib/jido/composer/workflow/strategy.ex` — replace inline FanOut with directive emission in `dispatch_current_node`, add `pending_fan_out` state, `fan_out_branch_result` handler, `maybe_complete_fan_out`, `cancel_and_fail`, child result routing via tag disambiguation
-- [ ] 4.8 Add `max_concurrency` field to `lib/jido/composer/node/fan_out_node.ex`
-- [ ] 4.9 Add FanOutBranch handling in `lib/jido/composer/workflow/dsl.ex` `run_directives/3` — execute via Task.async_stream, feed results back through cmd/3
-- [ ] 4.10 Add signal route `"composer.fan_out.branch_result"` in both strategies
-- [ ] 4.11 Record e2e cassette `e2e_fanout_mixed_agent_action` — delete stub, record, verify replay
-- [ ] 4.12 PHASE GATE: `mix precommit`
+- [x] 4.1 Write unit tests in `test/jido/composer/directive/fan_out_branch_test.exs` (NEW) — struct with instruction, struct with spawn_agent, instruction/spawn_agent mutual exclusivity
+- [x] 4.2 Write Workflow strategy tests in `test/jido/composer/workflow/strategy_test.exs` — dispatch FanOutNode emits FanOutBranch directives, `fan_out_branch_result` tracks completion, fan_out completes when all branches done (merge + transition), fail_fast cancels on error, collect_partial continues on error, `max_concurrency` limits dispatch, queued branches dispatch as slots open
+- [x] 4.3 Write DSL tests in `test/jido/composer/workflow/dsl_test.exs` — `run_sync` handles FanOutBranch directives via Task.async_stream
+- [x] 4.4 Write integration tests in `test/integration/workflow_fan_out_test.exs` — FanOut with mixed ActionNode + AgentNode branches, FanOut with orchestrator AgentNode branch (LLMStub), FanOut fail_fast with agent branch failure
+- [x] 4.5 Write e2e test — `test/e2e/e2e_test.exs`: FanOut with mixed agent and action branches (LLMStub plug mode)
+- [x] 4.6 Implement `Jido.Composer.Directive.FanOutBranch` in `lib/jido/composer/directive/fan_out_branch.ex` (NEW) — struct with `fan_out_id`, `branch_name`, `instruction`, `spawn_agent`, `result_action`
+- [x] 4.7 Refactor `lib/jido/composer/workflow/strategy.ex` — replace inline FanOut with directive emission in `dispatch_current_node`, add `pending_fan_out` state, `fan_out_branch_result` handler, `maybe_complete_fan_out`, `cancel_and_fail`, child result routing via tag disambiguation
+- [x] 4.8 Add `max_concurrency` field to `lib/jido/composer/node/fan_out_node.ex`
+- [x] 4.9 Add FanOutBranch handling in `lib/jido/composer/workflow/dsl.ex` `run_directives/3` — execute via Task.async_stream, feed results back through cmd/3
+- [x] 4.10 Add signal route `"composer.fan_out.branch_result"` in both strategies
+- [x] 4.11 Record e2e cassette `e2e_fanout_mixed_agent_action` — delete stub, record, verify replay
+- [x] 4.12 PHASE GATE: `mix precommit`
 
 ---
 

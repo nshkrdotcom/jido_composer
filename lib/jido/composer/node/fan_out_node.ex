@@ -28,6 +28,7 @@ defmodule Jido.Composer.Node.FanOutNode do
   defstruct [
     :name,
     :branches,
+    :max_concurrency,
     merge: :deep_merge,
     timeout: @default_timeout,
     on_error: :fail_fast
@@ -41,7 +42,8 @@ defmodule Jido.Composer.Node.FanOutNode do
           branches: [branch()],
           merge: merge(),
           timeout: pos_integer() | :infinity,
-          on_error: :fail_fast | :collect_partial
+          on_error: :fail_fast | :collect_partial,
+          max_concurrency: pos_integer() | nil
         }
 
   @spec new(keyword()) :: {:ok, t()} | {:error, term()}
@@ -63,7 +65,8 @@ defmodule Jido.Composer.Node.FanOutNode do
            branches: branches,
            merge: Keyword.get(opts, :merge, :deep_merge),
            timeout: Keyword.get(opts, :timeout, @default_timeout),
-           on_error: Keyword.get(opts, :on_error, :fail_fast)
+           on_error: Keyword.get(opts, :on_error, :fail_fast),
+           max_concurrency: Keyword.get(opts, :max_concurrency)
          }}
     end
   end
@@ -71,6 +74,8 @@ defmodule Jido.Composer.Node.FanOutNode do
   @impl true
   @spec run(t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(%__MODULE__{} = node, context, _opts \\ []) do
+    concurrency = node.max_concurrency || length(node.branches)
+
     results =
       node.branches
       |> Task.async_stream(
@@ -81,7 +86,7 @@ defmodule Jido.Composer.Node.FanOutNode do
         timeout: node.timeout,
         on_timeout: :kill_task,
         ordered: true,
-        max_concurrency: length(node.branches)
+        max_concurrency: concurrency
       )
       |> Enum.to_list()
 
@@ -141,7 +146,18 @@ defmodule Jido.Composer.Node.FanOutNode do
     {:ok, branch_results}
   end
 
-  defp merge_results(branch_results, :deep_merge) do
+  @doc """
+  Merges branch results using the specified merge strategy.
+
+  When called from the strategy with a completed_results map, converts to
+  the keyword-list format expected by the merge logic.
+  """
+  @spec merge_results(%{atom() => term()} | [{atom(), term()}], merge()) :: map()
+  def merge_results(branch_results, merge) when is_map(branch_results) do
+    merge_results(Enum.to_list(branch_results), merge)
+  end
+
+  def merge_results(branch_results, :deep_merge) do
     Enum.reduce(branch_results, %{}, fn
       {name, %NodeIO{} = io}, acc ->
         DeepMerge.deep_merge(acc, %{name => NodeIO.to_map(io)})
@@ -154,7 +170,7 @@ defmodule Jido.Composer.Node.FanOutNode do
     end)
   end
 
-  defp merge_results(branch_results, merge_fn) when is_function(merge_fn, 1) do
+  def merge_results(branch_results, merge_fn) when is_function(merge_fn, 1) do
     merge_fn.(branch_results)
   end
 end

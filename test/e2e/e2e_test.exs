@@ -1068,6 +1068,216 @@ defmodule Jido.Composer.E2E.E2ETest do
     end
   end
 
+  describe "workflow: FanOut with mixed agent and action branches (LLMStub)" do
+    defmodule MixedFanOutE2EWorkflow do
+      {:ok, add_node} = ActionNode.new(AddAction)
+      {:ok, echo_node} = ActionNode.new(EchoAction)
+
+      {:ok, agent_node} =
+        Jido.Composer.Node.AgentNode.new(Jido.Composer.TestAgents.TestWorkflowAgent)
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "mixed_parallel",
+          branches: [math: add_node, echo: echo_node, workflow: agent_node]
+        )
+
+      use Jido.Composer.Workflow,
+        name: "mixed_fan_out_e2e",
+        nodes: %{
+          parallel: fan_out,
+          finalize: NoopAction
+        },
+        transitions: %{
+          {:parallel, :ok} => :finalize,
+          {:finalize, :ok} => :done,
+          {:_, :error} => :failed
+        },
+        initial: :parallel
+    end
+
+    test "FanOut with mixed action and agent branches via run_sync" do
+      agent = MixedFanOutE2EWorkflow.new()
+
+      assert {:ok, ctx} =
+               MixedFanOutE2EWorkflow.run_sync(agent, %{
+                 value: 1.0,
+                 amount: 2.0,
+                 message: "hello",
+                 source: "e2e_db",
+                 extract: %{records: [%{id: 1, source: "test"}], count: 1}
+               })
+
+      # ActionNode branches
+      assert ctx[:parallel][:math][:result] == 3.0
+      assert ctx[:parallel][:echo][:echoed] == "hello"
+
+      # AgentNode branch (workflow agent)
+      assert Map.has_key?(ctx[:parallel], :workflow)
+
+      # Finalize step ran
+      assert Map.has_key?(ctx, :finalize)
+    end
+  end
+
+  describe "workflow: FanOut with mixed agent and action branches (cassette)" do
+    defmodule FanOutCassetteWorkflow do
+      {:ok, add_node} = ActionNode.new(AddAction)
+
+      {:ok, orch_node} =
+        Jido.Composer.Node.AgentNode.new(Jido.Composer.TestAgents.TestOrchestratorAgent)
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "cassette_parallel",
+          branches: [math: add_node, analyze: orch_node]
+        )
+
+      use Jido.Composer.Workflow,
+        name: "fan_out_cassette_workflow",
+        nodes: %{
+          parallel: fan_out,
+          finalize: NoopAction
+        },
+        transitions: %{
+          {:parallel, :ok} => :finalize,
+          {:finalize, :ok} => :done,
+          {:_, :error} => :failed
+        },
+        initial: :parallel
+    end
+
+    test "FanOut with orchestrator branch completes via cassette" do
+      with_cassette(
+        "e2e_fanout_mixed_agent_action",
+        CassetteHelper.default_cassette_opts(),
+        fn plug ->
+          alias Jido.Composer.Workflow.Strategy, as: WfStrategy
+
+          wf_agent = FanOutCassetteWorkflow.new()
+
+          {wf_agent, directives} =
+            FanOutCassetteWorkflow.run(wf_agent, %{
+              value: 5.0,
+              amount: 3.0,
+              query: "Summarize the math results."
+            })
+
+          wf_agent =
+            run_fanout_cassette_workflow(FanOutCassetteWorkflow, wf_agent, directives, plug)
+
+          strat = StratState.get(wf_agent)
+          assert strat.machine.status == :done
+          assert StratState.status(wf_agent) == :success
+
+          ctx = strat.machine.context.working
+          # Math branch completed
+          assert ctx[:parallel][:math][:result] == 8.0
+          # Orchestrator branch completed
+          assert Map.has_key?(ctx[:parallel], :analyze)
+          # Finalize step ran
+          assert Map.has_key?(ctx, :finalize)
+        end
+      )
+    end
+
+    defp run_fanout_cassette_workflow(_module, agent, [], _plug), do: agent
+
+    defp run_fanout_cassette_workflow(module, agent, [directive | rest], plug) do
+      alias Jido.Composer.Directive.FanOutBranch
+
+      case directive do
+        %Directive.RunInstruction{instruction: instr, result_action: result_action} ->
+          payload = execute_tool_instruction(instr.action, instr.params, %{})
+          {agent, new_directives} = module.cmd(agent, {result_action, payload})
+          run_fanout_cassette_workflow(module, agent, new_directives ++ rest, plug)
+
+        %FanOutBranch{} = _first_branch ->
+          {fan_out_directives, remaining} =
+            Enum.split_with([directive | rest], &match?(%FanOutBranch{}, &1))
+
+          results =
+            Enum.map(fan_out_directives, fn %FanOutBranch{} = branch ->
+              result = execute_fanout_branch_cassette(branch, plug)
+              {branch.branch_name, result}
+            end)
+
+          {agent, final_directives} =
+            Enum.reduce(results, {agent, []}, fn {branch_name, result}, {acc, _dirs} ->
+              module.cmd(
+                acc,
+                {:fan_out_branch_result, %{branch_name: branch_name, result: result}}
+              )
+            end)
+
+          run_fanout_cassette_workflow(module, agent, final_directives ++ remaining, plug)
+
+        _other ->
+          run_fanout_cassette_workflow(module, agent, rest, plug)
+      end
+    end
+
+    defp execute_fanout_branch_cassette(
+           %Jido.Composer.Directive.FanOutBranch{instruction: %Jido.Instruction{} = instr},
+           _plug
+         ) do
+      case Jido.Exec.run(instr.action, instr.params) do
+        {:ok, result} -> {:ok, result}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+
+    defp execute_fanout_branch_cassette(
+           %Jido.Composer.Directive.FanOutBranch{spawn_agent: spawn_info},
+           plug
+         )
+         when not is_nil(spawn_info) do
+      context = Map.get(spawn_info.opts, :context, %{})
+      child_module = spawn_info.agent
+
+      if function_exported?(child_module, :query_sync, 3) do
+        run_child_orchestrator_with_cassette_fanout(child_module, context, plug)
+      else
+        child_agent = child_module.new()
+        child_module.run_sync(child_agent, context)
+      end
+    end
+
+    defp run_child_orchestrator_with_cassette_fanout(child_module, context, plug) do
+      query = Map.get(context, :query, "Summarize the data.")
+
+      strategy_opts = [
+        nodes: child_module.strategy_opts()[:nodes] || [EchoAction],
+        model: "anthropic:claude-sonnet-4-20250514",
+        system_prompt:
+          child_module.strategy_opts()[:system_prompt] || "You are a helpful assistant.",
+        max_iterations: 10,
+        req_options: [plug: plug]
+      ]
+
+      orch_agent = CassetteOrchestratorAgent.new()
+      ctx = %{strategy_opts: strategy_opts}
+      {orch_agent, _} = Strategy.init(orch_agent, ctx)
+
+      orch_agent = execute_orchestrator_loop(orch_agent, query)
+      strat = StratState.get(orch_agent)
+
+      case strat.status do
+        :completed ->
+          result =
+            case strat.result do
+              %Jido.Composer.NodeIO{} = io -> Jido.Composer.NodeIO.unwrap(io)
+              other -> other
+            end
+
+          {:ok, %{result: result, context: strat.context}}
+
+        _ ->
+          {:error, strat.result}
+      end
+    end
+  end
+
   describe "orchestrator: tool error recovery (cassette)" do
     test "LLM recovers when a tool fails" do
       with_cassette(

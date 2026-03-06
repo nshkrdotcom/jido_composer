@@ -3,6 +3,7 @@ defmodule Jido.Composer.Integration.WorkflowFanOutTest do
 
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
+  alias Jido.Composer.Directive.FanOutBranch
   alias Jido.Composer.Node.ActionNode
   alias Jido.Composer.Node.FanOutNode
   alias Jido.Composer.TestActions.{AddAction, EchoAction, FailAction}
@@ -101,8 +102,160 @@ defmodule Jido.Composer.Integration.WorkflowFanOutTest do
         {agent, new_directives} = agent_module.cmd(agent, {result_action, payload})
         run_directive_loop(agent_module, agent, new_directives ++ rest)
 
+      %FanOutBranch{} = _first_branch ->
+        {fan_out_directives, remaining} =
+          Enum.split_with([directive | rest], &match?(%FanOutBranch{}, &1))
+
+        agent = execute_fan_out_directives(agent_module, agent, fan_out_directives)
+        run_directive_loop(agent_module, agent, remaining)
+
       _other ->
         run_directive_loop(agent_module, agent, rest)
+    end
+  end
+
+  defp execute_fan_out_directives(agent_module, agent, fan_out_directives) do
+    # Execute branches sequentially in the test process (keeps process dictionary accessible)
+    results =
+      Enum.map(fan_out_directives, fn %FanOutBranch{} = branch ->
+        result = execute_fan_out_branch(branch)
+        {branch.branch_name, result}
+      end)
+
+    {agent, final_directives} =
+      Enum.reduce(results, {agent, []}, fn {branch_name, result}, {acc, _dirs} ->
+        agent_module.cmd(
+          acc,
+          {:fan_out_branch_result, %{branch_name: branch_name, result: result}}
+        )
+      end)
+
+    # Continue processing any directives emitted after fan-out completes
+    run_directive_loop(agent_module, agent, final_directives)
+  end
+
+  defp execute_fan_out_branch(%FanOutBranch{instruction: %Jido.Instruction{} = instr}) do
+    case execute_instruction(instr) do
+      %{status: :ok, result: result} -> {:ok, result}
+      %{status: :error, reason: reason} -> {:error, reason}
+    end
+  end
+
+  defp execute_fan_out_branch(%FanOutBranch{spawn_agent: spawn_info})
+       when not is_nil(spawn_info) do
+    context = Map.get(spawn_info.opts, :context, %{})
+    child_module = spawn_info.agent
+
+    cond do
+      function_exported?(child_module, :run_sync, 2) ->
+        child_agent = child_module.new()
+        child_module.run_sync(child_agent, context)
+
+      function_exported?(child_module, :query_sync, 3) ->
+        # For orchestrator agents, drive the directive loop manually
+        # so we can intercept LLM calls via LLMStub
+        run_orchestrator_child(child_module, context)
+
+      true ->
+        {:error, :agent_not_sync_runnable}
+    end
+  end
+
+  defp run_orchestrator_child(child_module, context) do
+    alias Jido.Composer.TestSupport.LLMStub
+    alias Jido.Composer.Orchestrator.Strategy, as: OrchStrategy
+
+    query = Map.get(context, :query, "")
+
+    strategy_opts = [
+      nodes: child_module.strategy_opts()[:nodes] || [],
+      model: child_module.strategy_opts()[:model],
+      system_prompt:
+        child_module.strategy_opts()[:system_prompt] || "You are a helpful assistant.",
+      max_iterations: 10,
+      req_options: []
+    ]
+
+    agent = %Jido.Agent{name: "test_orch_child", state: %{}}
+    ctx = %{strategy_opts: strategy_opts}
+    {agent, _} = OrchStrategy.init(agent, ctx)
+
+    {agent, directives} =
+      OrchStrategy.cmd(
+        agent,
+        [%Jido.Instruction{action: :orchestrator_start, params: %{query: query}}],
+        %{}
+      )
+
+    agent = run_orch_directives(agent, directives)
+    strat = StratState.get(agent)
+
+    case strat.status do
+      :completed ->
+        result =
+          case strat.result do
+            %Jido.Composer.NodeIO{} = io -> Jido.Composer.NodeIO.unwrap(io)
+            other -> other
+          end
+
+        {:ok, %{result: result, context: strat.context}}
+
+      _ ->
+        {:error, strat.result}
+    end
+  end
+
+  defp run_orch_directives(agent, []), do: agent
+
+  defp run_orch_directives(agent, [directive | rest]) do
+    alias Jido.Composer.TestSupport.LLMStub
+    alias Jido.Composer.Orchestrator.Strategy, as: OrchStrategy
+
+    case directive do
+      %Directive.RunInstruction{
+        instruction: %Jido.Instruction{action: Jido.Composer.Orchestrator.LLMAction} = instr,
+        result_action: result_action
+      } ->
+        payload =
+          case LLMStub.execute(instr.params) do
+            {:ok, %{response: response, conversation: conversation}} ->
+              %{status: :ok, result: %{response: response, conversation: conversation}, meta: %{}}
+
+            {:error, reason} ->
+              %{status: :error, result: %{error: reason}, meta: %{}}
+          end
+
+        {agent, new_directives} =
+          OrchStrategy.cmd(
+            agent,
+            [%Jido.Instruction{action: result_action, params: payload}],
+            %{}
+          )
+
+        run_orch_directives(agent, new_directives ++ rest)
+
+      %Directive.RunInstruction{
+        instruction: %Jido.Instruction{action: action_module, params: params},
+        result_action: result_action,
+        meta: meta
+      } ->
+        payload =
+          case Jido.Exec.run(action_module, params) do
+            {:ok, result} -> %{status: :ok, result: result, meta: meta || %{}}
+            {:error, reason} -> %{status: :error, result: reason, meta: meta || %{}}
+          end
+
+        {agent, new_directives} =
+          OrchStrategy.cmd(
+            agent,
+            [%Jido.Instruction{action: result_action, params: payload}],
+            %{}
+          )
+
+        run_orch_directives(agent, new_directives ++ rest)
+
+      _other ->
+        run_orch_directives(agent, rest)
     end
   end
 
@@ -128,6 +281,82 @@ defmodule Jido.Composer.Integration.WorkflowFanOutTest do
     end
   end
 
+  # -- Mixed FanOut with AgentNode workflows --
+
+  defmodule MixedFanOutWorkflow do
+    {:ok, echo_node} = ActionNode.new(EchoAction)
+
+    {:ok, agent_node} =
+      Jido.Composer.Node.AgentNode.new(Jido.Composer.TestAgents.TestWorkflowAgent)
+
+    {:ok, fan_out} =
+      FanOutNode.new(
+        name: "mixed_parallel",
+        branches: [echo_branch: echo_node, workflow_branch: agent_node]
+      )
+
+    use Jido.Composer.Workflow,
+      name: "mixed_fan_out",
+      nodes: %{
+        parallel: fan_out
+      },
+      transitions: %{
+        {:parallel, :ok} => :done,
+        {:_, :error} => :failed
+      },
+      initial: :parallel
+  end
+
+  defmodule OrchAgentFanOutWorkflow do
+    {:ok, add_node} = ActionNode.new(AddAction)
+
+    {:ok, orch_node} =
+      Jido.Composer.Node.AgentNode.new(Jido.Composer.TestAgents.TestOrchestratorAgent)
+
+    {:ok, fan_out} =
+      FanOutNode.new(
+        name: "orch_parallel",
+        branches: [math: add_node, analyze: orch_node]
+      )
+
+    use Jido.Composer.Workflow,
+      name: "orch_fan_out",
+      nodes: %{
+        parallel: fan_out
+      },
+      transitions: %{
+        {:parallel, :ok} => :done,
+        {:_, :error} => :failed
+      },
+      initial: :parallel
+  end
+
+  defmodule FailFastAgentFanOutWorkflow do
+    {:ok, fail_node} = ActionNode.new(FailAction)
+
+    {:ok, agent_node} =
+      Jido.Composer.Node.AgentNode.new(Jido.Composer.TestAgents.TestWorkflowAgent)
+
+    {:ok, fan_out} =
+      FanOutNode.new(
+        name: "fail_fast_parallel",
+        branches: [fail: fail_node, workflow: agent_node],
+        on_error: :fail_fast
+      )
+
+    use Jido.Composer.Workflow,
+      name: "fail_fast_agent_fan_out",
+      nodes: %{
+        parallel: fan_out
+      },
+      transitions: %{
+        {:parallel, :ok} => :done,
+        {:parallel, :error} => :failed,
+        {:_, :error} => :failed
+      },
+      initial: :parallel
+  end
+
   # -- Tests --
 
   describe "FanOutNode in workflow" do
@@ -140,30 +369,30 @@ defmodule Jido.Composer.Integration.WorkflowFanOutTest do
       assert review_node.name == "parallel_review"
     end
 
-    test "FanOutNode executes inline during workflow (no directive emitted)" do
+    test "FanOutNode emits FanOutBranch directives" do
       agent = SingleFanOutWorkflow.new()
 
       {agent, directives} =
         SingleFanOutWorkflow.run(agent, %{value: 1.0, amount: 2.0, message: "test"})
 
-      # FanOutNode executes inline — no directives needed, workflow completes immediately
-      assert directives == []
+      # FanOutNode now emits FanOutBranch directives
+      assert length(directives) == 2
+      assert Enum.all?(directives, &match?(%FanOutBranch{}, &1))
 
+      # Strategy has pending_fan_out state
       strat = StratState.get(agent)
-      assert strat.machine.status == :done
-      assert StratState.status(agent) == :success
+      assert strat.pending_fan_out != nil
     end
 
-    test "FanOutNode merged result is scoped under state name" do
+    test "FanOutNode merged result is scoped under state name via run_sync" do
       agent = SingleFanOutWorkflow.new()
-      {agent, _} = SingleFanOutWorkflow.run(agent, %{value: 1.0, amount: 2.0, message: "hi"})
 
-      strat = StratState.get(agent)
-      ctx = strat.machine.context.working
+      assert {:ok, result} =
+               SingleFanOutWorkflow.run_sync(agent, %{value: 1.0, amount: 2.0, message: "hi"})
 
       # FanOutNode results are scoped under the state name :compute
-      assert ctx[:compute][:add][:result] == 3.0
-      assert ctx[:compute][:echo][:echoed] == "hi"
+      assert result[:compute][:add][:result] == 3.0
+      assert result[:compute][:echo][:echoed] == "hi"
     end
 
     test "completes workflow with mixed ActionNode and FanOutNode steps" do
@@ -194,11 +423,66 @@ defmodule Jido.Composer.Integration.WorkflowFanOutTest do
 
     test "FanOutNode branch failure transitions to error state" do
       agent = FailingFanOutWorkflow.new()
-      {agent, _directives} = FailingFanOutWorkflow.run(agent, %{message: "hello"})
+      {agent, directives} = FailingFanOutWorkflow.run(agent, %{message: "hello"})
+
+      # Execute the FanOut directives
+      agent = execute_workflow(FailingFanOutWorkflow, agent, directives)
 
       strat = StratState.get(agent)
       assert strat.machine.status == :failed
       assert StratState.status(agent) == :failure
+    end
+  end
+
+  describe "FanOut with mixed ActionNode + AgentNode branches" do
+    test "FanOut with mixed branches completes via run_sync" do
+      agent = MixedFanOutWorkflow.new()
+
+      assert {:ok, result} =
+               MixedFanOutWorkflow.run_sync(agent, %{
+                 message: "hello",
+                 source: "test_db",
+                 extract: %{records: [%{id: 1, source: "test"}], count: 1}
+               })
+
+      assert Map.has_key?(result[:parallel], :echo_branch)
+      assert Map.has_key?(result[:parallel], :workflow_branch)
+      assert result[:parallel][:echo_branch][:echoed] == "hello"
+    end
+
+    test "FanOut with orchestrator AgentNode branch (LLMStub) via manual directive loop" do
+      alias Jido.Composer.TestSupport.LLMStub
+
+      LLMStub.setup([
+        {:final_answer, "Analysis complete."}
+      ])
+
+      agent = OrchAgentFanOutWorkflow.new()
+
+      {agent, directives} =
+        OrchAgentFanOutWorkflow.run(agent, %{value: 1.0, amount: 2.0, query: "Test query"})
+
+      # Execute via manual directive loop that handles FanOutBranch
+      agent = execute_workflow(OrchAgentFanOutWorkflow, agent, directives)
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+      assert StratState.status(agent) == :success
+
+      ctx = strat.machine.context.working
+      assert Map.has_key?(ctx[:parallel], :math)
+      assert Map.has_key?(ctx[:parallel], :analyze)
+      assert ctx[:parallel][:math][:result] == 3.0
+    end
+
+    test "FanOut fail_fast with agent branch failure" do
+      agent = FailFastAgentFanOutWorkflow.new()
+
+      assert {:error, :workflow_failed} =
+               FailFastAgentFanOutWorkflow.run_sync(agent, %{
+                 source: "test_db",
+                 extract: %{records: [%{id: 1, source: "test"}], count: 1}
+               })
     end
   end
 end

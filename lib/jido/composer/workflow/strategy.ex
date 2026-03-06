@@ -11,6 +11,7 @@ defmodule Jido.Composer.Workflow.Strategy do
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.Composer.Context
+  alias Jido.Composer.Directive.FanOutBranch
   alias Jido.Composer.Directive.SuspendForHuman
   alias Jido.Composer.HITL.{ApprovalRequest, ApprovalResponse}
   alias Jido.Composer.Node.ActionNode
@@ -42,6 +43,7 @@ defmodule Jido.Composer.Workflow.Strategy do
         pending_child: nil,
         child_request_id: nil,
         pending_approval: nil,
+        pending_fan_out: nil,
         ambient_keys: opts[:ambient] || [],
         fork_fns: opts[:fork_fns] || %{}
       })
@@ -144,6 +146,21 @@ defmodule Jido.Composer.Workflow.Strategy do
     {agent, []}
   end
 
+  def cmd(agent, [%Jido.Instruction{action: :fan_out_branch_result} = instr | _rest], _ctx) do
+    strat = StratState.get(agent)
+    params = instr.params
+    branch_name = params[:branch_name]
+    result = params[:result]
+    fan_out = strat.pending_fan_out
+
+    # If fan_out was already cancelled (fail_fast), ignore late results
+    if is_nil(fan_out) do
+      {agent, []}
+    else
+      handle_fan_out_branch_result(agent, fan_out, branch_name, result, strat)
+    end
+  end
+
   def cmd(agent, [%Jido.Instruction{action: :hitl_response} = instr | _rest], _ctx) do
     strat = StratState.get(agent)
 
@@ -222,6 +239,7 @@ defmodule Jido.Composer.Workflow.Strategy do
       {"composer.workflow.child.result", {:strategy_cmd, :workflow_child_result}},
       {"jido.agent.child.started", {:strategy_cmd, :workflow_child_started}},
       {"jido.agent.child.exit", {:strategy_cmd, :workflow_child_exit}},
+      {"composer.fan_out.branch_result", {:strategy_cmd, :fan_out_branch_result}},
       {"composer.hitl.response", {:strategy_cmd, :hitl_response}},
       {"composer.hitl.timeout", {:strategy_cmd, :hitl_timeout}}
     ]
@@ -336,33 +354,7 @@ defmodule Jido.Composer.Workflow.Strategy do
         {agent, [directive]}
 
       %FanOutNode{} = fan_out_node ->
-        # FanOutNode encapsulates concurrency internally — execute and process result
-        case FanOutNode.run(fan_out_node, Context.to_flat_map(strat.machine.context)) do
-          {:ok, result} ->
-            machine = Machine.apply_result(strat.machine, result)
-
-            case Machine.transition(machine, :ok) do
-              {:ok, machine} ->
-                agent = put_machine(agent, machine)
-                handle_after_transition(agent)
-
-              {:error, _reason} ->
-                agent = put_machine(agent, machine)
-                agent = StratState.set_status(agent, :failure)
-                {agent, []}
-            end
-
-          {:error, _reason} ->
-            case Machine.transition(strat.machine, :error) do
-              {:ok, machine} ->
-                agent = put_machine(agent, machine)
-                handle_after_transition(agent)
-
-              {:error, _reason} ->
-                agent = StratState.set_status(agent, :failure)
-                {agent, []}
-            end
-        end
+        dispatch_fan_out(agent, fan_out_node, strat)
 
       nil ->
         {agent, []}
@@ -433,6 +425,206 @@ defmodule Jido.Composer.Workflow.Strategy do
 
   defp put_machine(agent, machine) do
     StratState.update(agent, fn strat -> %{strat | machine: machine} end)
+  end
+
+  # -- FanOut helpers --
+
+  defp handle_fan_out_branch_result(agent, fan_out, branch_name, result, strat) do
+    case result do
+      {:ok, branch_result} ->
+        completed = Map.put(fan_out.completed_results, branch_name, branch_result)
+
+        pending =
+          fan_out.pending_branches
+          |> MapSet.delete(branch_name)
+
+        fan_out = %{fan_out | completed_results: completed, pending_branches: pending}
+
+        # Dispatch queued branches if slots are available
+        {fan_out, new_directives} = dispatch_queued_branches(fan_out, strat)
+
+        agent =
+          StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out} end)
+
+        maybe_complete_fan_out(agent, new_directives)
+
+      {:error, reason} ->
+        case fan_out.on_error do
+          :fail_fast ->
+            cancel_and_fail(agent, fan_out, reason)
+
+          :collect_partial ->
+            completed = Map.put(fan_out.completed_results, branch_name, {:error, reason})
+
+            pending =
+              fan_out.pending_branches
+              |> MapSet.delete(branch_name)
+
+            fan_out = %{fan_out | completed_results: completed, pending_branches: pending}
+
+            {fan_out, new_directives} = dispatch_queued_branches(fan_out, strat)
+
+            agent =
+              StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out} end)
+
+            maybe_complete_fan_out(agent, new_directives)
+        end
+    end
+  end
+
+  defp dispatch_fan_out(agent, %FanOutNode{} = fan_out_node, strat) do
+    fan_out_id = generate_fan_out_id()
+    flat_context = Context.to_flat_map(strat.machine.context)
+
+    all_branches =
+      Enum.map(fan_out_node.branches, fn {branch_name, branch_node} ->
+        {branch_name,
+         build_fan_out_directive(fan_out_id, branch_name, branch_node, flat_context, strat)}
+      end)
+
+    max_concurrency = fan_out_node.max_concurrency || length(all_branches)
+    {to_dispatch, to_queue} = Enum.split(all_branches, max_concurrency)
+
+    dispatched_names = Enum.map(to_dispatch, fn {name, _} -> name end) |> MapSet.new()
+
+    fan_out_state = %{
+      id: fan_out_id,
+      node: fan_out_node,
+      pending_branches: dispatched_names,
+      completed_results: %{},
+      queued_branches: to_queue,
+      merge: fan_out_node.merge,
+      on_error: fan_out_node.on_error
+    }
+
+    agent =
+      StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out_state} end)
+
+    directives = Enum.map(to_dispatch, fn {_name, directive} -> directive end)
+    {agent, directives}
+  end
+
+  defp build_fan_out_directive(fan_out_id, branch_name, branch_node, flat_context, strat) do
+    case branch_node do
+      %ActionNode{action_module: action_module} ->
+        %FanOutBranch{
+          fan_out_id: fan_out_id,
+          branch_name: branch_name,
+          instruction: %Jido.Instruction{
+            action: action_module,
+            params: flat_context
+          },
+          result_action: :fan_out_branch_result
+        }
+
+      %AgentNode{agent_module: agent_module, opts: opts} ->
+        child_context = Context.fork_for_child(strat.machine.context)
+        child_flat = Context.to_flat_map(child_context)
+
+        %FanOutBranch{
+          fan_out_id: fan_out_id,
+          branch_name: branch_name,
+          spawn_agent: %{
+            agent: agent_module,
+            opts: Map.new(opts) |> Map.put(:context, child_flat)
+          },
+          result_action: :fan_out_branch_result
+        }
+
+      fun when is_function(fun, 1) ->
+        %FanOutBranch{
+          fan_out_id: fan_out_id,
+          branch_name: branch_name,
+          instruction: {:function, fun, flat_context},
+          result_action: :fan_out_branch_result
+        }
+    end
+  end
+
+  defp dispatch_queued_branches(fan_out, _strat) when fan_out.queued_branches == [],
+    do: {fan_out, []}
+
+  defp dispatch_queued_branches(fan_out, _strat) do
+    max =
+      (fan_out.node.max_concurrency || length(fan_out.node.branches)) -
+        MapSet.size(fan_out.pending_branches)
+
+    if max <= 0 do
+      {fan_out, []}
+    else
+      {to_dispatch, remaining} = Enum.split(fan_out.queued_branches, max)
+      new_pending_names = Enum.map(to_dispatch, fn {name, _} -> name end)
+      pending = Enum.reduce(new_pending_names, fan_out.pending_branches, &MapSet.put(&2, &1))
+      directives = Enum.map(to_dispatch, fn {_name, directive} -> directive end)
+      fan_out = %{fan_out | pending_branches: pending, queued_branches: remaining}
+      {fan_out, directives}
+    end
+  end
+
+  defp maybe_complete_fan_out(agent, extra_directives) do
+    strat = StratState.get(agent)
+    fan_out = strat.pending_fan_out
+
+    if MapSet.size(fan_out.pending_branches) == 0 and fan_out.queued_branches == [] do
+      # All branches done — merge results and transition
+      merged = FanOutNode.merge_results(fan_out.completed_results, fan_out.merge)
+      machine = Machine.apply_result(strat.machine, merged)
+
+      agent = StratState.update(agent, fn s -> %{s | pending_fan_out: nil} end)
+
+      case Machine.transition(machine, :ok) do
+        {:ok, machine} ->
+          agent = put_machine(agent, machine)
+          handle_after_transition(agent)
+
+        {:error, _reason} ->
+          agent = put_machine(agent, machine)
+          agent = StratState.set_status(agent, :failure)
+          {agent, []}
+      end
+    else
+      {agent, extra_directives}
+    end
+  end
+
+  defp cancel_and_fail(agent, fan_out, _reason) do
+    # Emit StopChild directives for pending agent branches
+    stop_directives =
+      fan_out.pending_branches
+      |> MapSet.to_list()
+      |> Enum.map(fn branch_name ->
+        Directive.stop_child({:fan_out, fan_out.id, branch_name})
+      end)
+
+    agent = StratState.update(agent, fn s -> %{s | pending_fan_out: nil} end)
+    strat = StratState.get(agent)
+
+    case Machine.transition(strat.machine, :error) do
+      {:ok, machine} ->
+        agent = put_machine(agent, machine)
+        handle_after_transition_with_directives(agent, stop_directives)
+
+      {:error, _reason} ->
+        agent = StratState.set_status(agent, :failure)
+        {agent, stop_directives}
+    end
+  end
+
+  defp handle_after_transition_with_directives(agent, extra_directives) do
+    strat = StratState.get(agent)
+
+    if Machine.terminal?(strat.machine) do
+      status = if strat.machine.status == :done, do: :success, else: :failure
+      agent = StratState.set_status(agent, status)
+      {agent, extra_directives}
+    else
+      {agent, node_directives} = dispatch_current_node(agent)
+      {agent, extra_directives ++ node_directives}
+    end
+  end
+
+  defp generate_fan_out_id do
+    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
 
   defp build_nodes(node_specs) when is_map(node_specs) do

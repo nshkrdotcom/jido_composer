@@ -267,6 +267,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       {"composer.orchestrator.child.result", {:strategy_cmd, :orchestrator_child_result}},
       {"jido.agent.child.started", {:strategy_cmd, :orchestrator_child_started}},
       {"jido.agent.child.exit", {:strategy_cmd, :orchestrator_child_exit}},
+      {"composer.fan_out.branch_result", {:strategy_cmd, :fan_out_branch_result}},
       {"composer.hitl.response", {:strategy_cmd, :hitl_response}},
       {"composer.hitl.timeout", {:strategy_cmd, :hitl_timeout}}
     ]

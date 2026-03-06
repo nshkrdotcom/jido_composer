@@ -460,6 +460,343 @@ defmodule Jido.Composer.Workflow.StrategyTest do
     end
   end
 
+  describe "FanOut directive-based dispatch" do
+    alias Jido.Composer.Directive.FanOutBranch
+    alias Jido.Composer.Node.{ActionNode, FanOutNode}
+
+    defp init_fan_out_workflow(opts \\ []) do
+      {:ok, add_node} = ActionNode.new(Jido.Composer.TestActions.AddAction)
+      {:ok, echo_node} = ActionNode.new(Jido.Composer.TestActions.EchoAction)
+
+      fan_out_opts = [
+        name: "parallel",
+        branches: [add: add_node, echo: echo_node]
+      ]
+
+      fan_out_opts =
+        if mc = Keyword.get(opts, :max_concurrency) do
+          Keyword.put(fan_out_opts, :max_concurrency, mc)
+        else
+          fan_out_opts
+        end
+
+      fan_out_opts =
+        if oe = Keyword.get(opts, :on_error) do
+          Keyword.put(fan_out_opts, :on_error, oe)
+        else
+          fan_out_opts
+        end
+
+      {:ok, fan_out} = FanOutNode.new(fan_out_opts)
+
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{compute: fan_out},
+          transitions: %{
+            {:compute, :ok} => :done,
+            {:compute, :error} => :failed,
+            {:_, :error} => :failed
+          },
+          initial: :compute
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _} = Strategy.init(agent, ctx)
+
+      # Start workflow
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_start,
+              params: %{value: 1.0, amount: 2.0, message: "hi"}
+            }
+          ],
+          ctx
+        )
+
+      {agent, directives, ctx}
+    end
+
+    test "dispatch FanOutNode emits FanOutBranch directives" do
+      {_agent, directives, _ctx} = init_fan_out_workflow()
+
+      assert length(directives) == 2
+      assert Enum.all?(directives, &match?(%FanOutBranch{}, &1))
+
+      branch_names = Enum.map(directives, & &1.branch_name) |> Enum.sort()
+      assert branch_names == [:add, :echo]
+
+      # Each branch has the same fan_out_id
+      ids = Enum.map(directives, & &1.fan_out_id) |> Enum.uniq()
+      assert length(ids) == 1
+    end
+
+    test "fan_out_branch_result tracks completion" do
+      {agent, _directives, ctx} = init_fan_out_workflow()
+
+      # Feed first branch result
+      {agent, _directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:ok, %{result: 3.0}}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      assert strat.pending_fan_out != nil
+      assert strat.pending_fan_out.completed_results[:add] == %{result: 3.0}
+    end
+
+    test "fan_out completes when all branches done (merge + transition)" do
+      {agent, _directives, ctx} = init_fan_out_workflow()
+
+      # Feed both branch results
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:ok, %{result: 3.0}}}
+            }
+          ],
+          ctx
+        )
+
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:ok, %{echoed: "hi"}}}
+            }
+          ],
+          ctx
+        )
+
+      # Should have transitioned to terminal state
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+      assert strat.pending_fan_out == nil
+      assert directives == []
+
+      # Results should be merged and scoped under :compute
+      assert strat.machine.context.working[:compute][:add][:result] == 3.0
+      assert strat.machine.context.working[:compute][:echo][:echoed] == "hi"
+    end
+
+    test "fail_fast cancels on error" do
+      {:ok, add_node} = ActionNode.new(Jido.Composer.TestActions.AddAction)
+      {:ok, fail_node} = ActionNode.new(Jido.Composer.TestActions.FailAction)
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "failing",
+          branches: [add: add_node, fail: fail_node],
+          on_error: :fail_fast
+        )
+
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{compute: fan_out},
+          transitions: %{
+            {:compute, :ok} => :done,
+            {:compute, :error} => :failed,
+            {:_, :error} => :failed
+          },
+          initial: :compute
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, _directives} =
+        Strategy.cmd(
+          agent,
+          [%Jido.Instruction{action: :workflow_start, params: %{value: 1.0, amount: 2.0}}],
+          ctx
+        )
+
+      # Feed error result
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :fail, result: {:error, "intentional failure"}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :failed
+      assert strat.pending_fan_out == nil
+
+      # Directives may include StopChild for remaining pending branches
+      assert is_list(directives)
+    end
+
+    test "collect_partial continues on error" do
+      {agent, _directives, ctx} = init_fan_out_workflow(on_error: :collect_partial)
+
+      # Feed error for one branch
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:error, "add failed"}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      # Still pending, not failed
+      assert strat.pending_fan_out != nil
+      assert strat.pending_fan_out.completed_results[:add] == {:error, "add failed"}
+
+      # Feed success for second branch — should complete
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:ok, %{echoed: "hi"}}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+      assert strat.pending_fan_out == nil
+    end
+
+    test "max_concurrency limits dispatch" do
+      {:ok, add_node1} = ActionNode.new(Jido.Composer.TestActions.AddAction)
+      {:ok, add_node2} = ActionNode.new(Jido.Composer.TestActions.AddAction)
+      {:ok, echo_node} = ActionNode.new(Jido.Composer.TestActions.EchoAction)
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "limited",
+          branches: [a: add_node1, b: add_node2, c: echo_node],
+          max_concurrency: 2
+        )
+
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{compute: fan_out},
+          transitions: %{
+            {:compute, :ok} => :done,
+            {:_, :error} => :failed
+          },
+          initial: :compute
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_start,
+              params: %{value: 1.0, amount: 2.0, message: "hi"}
+            }
+          ],
+          ctx
+        )
+
+      # Only 2 branches dispatched
+      assert length(directives) == 2
+
+      # 1 branch queued
+      strat = StratState.get(agent)
+      assert length(strat.pending_fan_out.queued_branches) == 1
+    end
+
+    test "queued branches dispatch as slots open" do
+      {:ok, add_node1} = ActionNode.new(Jido.Composer.TestActions.AddAction)
+      {:ok, add_node2} = ActionNode.new(Jido.Composer.TestActions.AddAction)
+      {:ok, echo_node} = ActionNode.new(Jido.Composer.TestActions.EchoAction)
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "limited",
+          branches: [a: add_node1, b: add_node2, c: echo_node],
+          max_concurrency: 2
+        )
+
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{compute: fan_out},
+          transitions: %{
+            {:compute, :ok} => :done,
+            {:_, :error} => :failed
+          },
+          initial: :compute
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, _directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_start,
+              params: %{value: 1.0, amount: 2.0, message: "hi"}
+            }
+          ],
+          ctx
+        )
+
+      # Complete first branch — queued branch should be dispatched
+      {agent, new_directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :a, result: {:ok, %{result: 3.0}}}
+            }
+          ],
+          ctx
+        )
+
+      # Should have dispatched the queued branch
+      assert length(new_directives) == 1
+      assert [%FanOutBranch{branch_name: :c}] = new_directives
+
+      strat = StratState.get(agent)
+      assert strat.pending_fan_out.queued_branches == []
+    end
+  end
+
   describe "persistence readiness" do
     test "strategy state is serializable via :erlang.term_to_binary" do
       {agent, ctx} = init_agent()

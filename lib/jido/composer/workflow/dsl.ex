@@ -135,12 +135,67 @@ defmodule Jido.Composer.Workflow.DSL do
 
         run_directives(module, agent, new_directives ++ rest)
 
+      %Jido.Composer.Directive.FanOutBranch{} = _first_branch ->
+        # Collect all FanOutBranch directives from this batch
+        {fan_out_directives, remaining} =
+          Enum.split_with([directive | rest], fn
+            %Jido.Composer.Directive.FanOutBranch{} -> true
+            _ -> false
+          end)
+
+        branch_results = execute_fan_out_branches(fan_out_directives)
+
+        # Feed each result back through cmd/3, accumulating directives from the last call
+        {agent, final_directives} =
+          Enum.reduce(branch_results, {agent, []}, fn {branch_name, result}, {acc, _dirs} ->
+            module.cmd(acc, {:fan_out_branch_result, %{branch_name: branch_name, result: result}})
+          end)
+
+        run_directives(module, agent, final_directives ++ remaining)
+
       %Jido.Composer.Directive.SuspendForHuman{} = suspend ->
         {:suspend, agent, suspend}
 
       _other ->
         run_directives(module, agent, rest)
     end
+  end
+
+  defp execute_fan_out_branches(fan_out_directives) do
+    fan_out_directives
+    |> Task.async_stream(
+      fn %Jido.Composer.Directive.FanOutBranch{} = branch ->
+        result = execute_fan_out_branch(branch)
+        {branch.branch_name, result}
+      end,
+      timeout: 30_000,
+      on_timeout: :kill_task,
+      ordered: true,
+      max_concurrency: length(fan_out_directives)
+    )
+    |> Enum.map(fn
+      {:ok, {name, result}} -> {name, result}
+      {:exit, reason} -> {nil, {:error, {:branch_crashed, reason}}}
+    end)
+  end
+
+  defp execute_fan_out_branch(%Jido.Composer.Directive.FanOutBranch{
+         instruction: {:function, fun, context}
+       }) do
+    fun.(context)
+  end
+
+  defp execute_fan_out_branch(%Jido.Composer.Directive.FanOutBranch{
+         instruction: %Jido.Instruction{} = instr
+       }) do
+    case execute_sync(instr) do
+      %{status: :ok, result: result} -> {:ok, result}
+      %{status: :error, reason: reason} -> {:error, reason}
+    end
+  end
+
+  defp execute_fan_out_branch(%Jido.Composer.Directive.FanOutBranch{spawn_agent: spawn_info}) do
+    execute_child_sync(spawn_info.agent, spawn_info.opts)
   end
 
   defp execute_child_sync(child_module, spawn_opts) do

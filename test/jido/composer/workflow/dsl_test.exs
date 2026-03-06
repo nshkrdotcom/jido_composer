@@ -179,6 +179,43 @@ defmodule Jido.Composer.Workflow.DSLTest do
     end
   end
 
+  describe "FanOutBranch directive handling" do
+    alias Jido.Composer.Node.{ActionNode, FanOutNode}
+
+    defmodule FanOutDSLWorkflow do
+      {:ok, add_node} = ActionNode.new(AddAction)
+      {:ok, echo_node} = ActionNode.new(Jido.Composer.TestActions.EchoAction)
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "parallel",
+          branches: [add: add_node, echo: echo_node]
+        )
+
+      use Jido.Composer.Workflow,
+        name: "fan_out_dsl_workflow",
+        nodes: %{
+          compute: fan_out
+        },
+        transitions: %{
+          {:compute, :ok} => :done,
+          {:_, :error} => :failed
+        },
+        initial: :compute
+    end
+
+    test "run_sync handles FanOutBranch directives via Task.async_stream" do
+      agent = FanOutDSLWorkflow.new()
+
+      assert {:ok, result} =
+               FanOutDSLWorkflow.run_sync(agent, %{value: 1.0, amount: 2.0, message: "hello"})
+
+      # Results should be merged and scoped under :compute
+      assert result[:compute][:add][:result] == 3.0
+      assert result[:compute][:echo][:echoed] == "hello"
+    end
+  end
+
   describe "compile-time validation" do
     test "rejects initial state not in nodes" do
       assert_raise CompileError, fn ->
