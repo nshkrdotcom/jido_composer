@@ -10,6 +10,7 @@ defmodule Jido.Composer.Workflow.Strategy do
 
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
+  alias Jido.Composer.Checkpoint
   alias Jido.Composer.Context
   alias Jido.Composer.Directive.FanOutBranch
   alias Jido.Composer.Directive.Suspend, as: SuspendDirective
@@ -47,7 +48,8 @@ defmodule Jido.Composer.Workflow.Strategy do
         pending_suspension: nil,
         pending_fan_out: nil,
         ambient_keys: opts[:ambient] || [],
-        fork_fns: opts[:fork_fns] || %{}
+        fork_fns: opts[:fork_fns] || %{},
+        children: %{}
       })
 
     {agent, []}
@@ -794,6 +796,22 @@ defmodule Jido.Composer.Workflow.Strategy do
 
   defp generate_fan_out_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+  end
+
+  # -- Checkpoint hooks --
+
+  @doc false
+  def prepare_for_checkpoint(agent) do
+    strat = StratState.get(agent)
+    cleaned = Checkpoint.prepare_for_checkpoint(strat)
+    StratState.put(agent, cleaned)
+  end
+
+  @doc false
+  def reattach_runtime_config(agent, strategy_opts) do
+    strat = StratState.get(agent)
+    restored = Checkpoint.reattach_runtime_config(strat, strategy_opts)
+    StratState.put(agent, restored)
   end
 
   defp build_nodes(node_specs) when is_map(node_specs) do

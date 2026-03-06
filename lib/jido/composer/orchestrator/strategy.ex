@@ -12,6 +12,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
+  alias Jido.Composer.Checkpoint
   alias Jido.Composer.Directive.Suspend, as: SuspendDirective
   alias Jido.Composer.Directive.SuspendForHuman
   alias Jido.Composer.HITL.{ApprovalRequest, ApprovalResponse}
@@ -65,7 +66,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         approval_policy: approval_policy,
         rejection_policy: opts[:rejection_policy] || :continue_siblings,
         gated_calls: %{},
-        suspended_calls: %{}
+        suspended_calls: %{},
+        children: %{}
       })
 
     {agent, []}
@@ -792,6 +794,22 @@ defmodule Jido.Composer.Orchestrator.Strategy do
               "unknown tool name #{inspect(tool_name)}, " <>
                 "expected one of: #{inspect(Map.keys(strat.name_atoms))}"
     end
+  end
+
+  # -- Checkpoint hooks --
+
+  @doc false
+  def prepare_for_checkpoint(agent) do
+    strat = StratState.get(agent)
+    cleaned = Checkpoint.prepare_for_checkpoint(strat)
+    StratState.put(agent, cleaned)
+  end
+
+  @doc false
+  def reattach_runtime_config(agent, strategy_opts) do
+    strat = StratState.get(agent)
+    restored = Checkpoint.reattach_runtime_config(strat, strategy_opts)
+    StratState.put(agent, restored)
   end
 
   defp build_nodes(modules) when is_list(modules) do

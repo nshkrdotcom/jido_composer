@@ -1330,4 +1330,111 @@ defmodule Jido.Composer.E2E.E2ETest do
       )
     end
   end
+
+  describe "persistence: full checkpoint/thaw cycle" do
+    test "workflow with suspension checkpoints and resumes after thaw" do
+      alias Jido.Composer.Checkpoint
+      alias Jido.Composer.HITL.ApprovalResponse
+
+      # Define a workflow with HumanNode inline
+      defmodule CheckpointE2EWorkflow do
+        use Jido.Composer.Workflow,
+          name: "checkpoint_e2e",
+          description: "E2E checkpoint/thaw test",
+          nodes: %{
+            process: AccumulatorAction,
+            approval: %Jido.Composer.Node.HumanNode{
+              name: "approval",
+              description: "Approve",
+              prompt: "Approve result?",
+              allowed_responses: [:approved, :rejected],
+              timeout: 60_000
+            },
+            finish: NoopAction
+          },
+          transitions: %{
+            {:process, :ok} => :approval,
+            {:approval, :approved} => :finish,
+            {:approval, :rejected} => :failed,
+            {:approval, :timeout} => :failed,
+            {:finish, :ok} => :done,
+            {:_, :error} => :failed
+          },
+          initial: :process
+      end
+
+      # Phase 1: Run until suspension
+      agent = CheckpointE2EWorkflow.new()
+      {agent, directives} = CheckpointE2EWorkflow.run(agent, %{tag: "checkpoint-test"})
+      {agent, _remaining} = execute_until_suspend_e2e(CheckpointE2EWorkflow, agent, directives)
+
+      strat = StratState.get(agent)
+      assert strat.status == :waiting
+      assert strat.pending_suspension != nil
+
+      # Phase 2: Checkpoint (strip closures, serialize)
+      checkpoint_data = Checkpoint.prepare_for_checkpoint(strat)
+      binary = :erlang.term_to_binary(checkpoint_data, [:compressed])
+      assert byte_size(binary) > 0
+
+      # Phase 3: Simulate process death — create fresh agent
+      fresh_agent = CheckpointE2EWorkflow.new()
+
+      # Phase 4: Thaw — restore strategy state
+      restored_strat = :erlang.binary_to_term(binary)
+      restored_agent = StratState.put(fresh_agent, restored_strat)
+
+      # Verify restored state
+      restored = StratState.get(restored_agent)
+      assert restored.status == :waiting
+      assert restored.machine.status == :approval
+
+      # Phase 5: Resume with approval
+      {:ok, response} =
+        ApprovalResponse.new(
+          request_id: restored.pending_suspension.approval_request.id,
+          decision: :approved
+        )
+
+      {resumed_agent, resume_directives} =
+        CheckpointE2EWorkflow.cmd(
+          restored_agent,
+          {:hitl_response, Map.from_struct(response)}
+        )
+
+      # Phase 6: Execute to completion
+      {final_agent, _} =
+        execute_until_suspend_e2e(CheckpointE2EWorkflow, resumed_agent, resume_directives)
+
+      final_strat = StratState.get(final_agent)
+      assert final_strat.machine.status == :done
+      assert StratState.status(final_agent) == :success
+    end
+  end
+
+  # Helper for e2e checkpoint test
+  defp execute_until_suspend_e2e(_mod, agent, []), do: {agent, []}
+
+  defp execute_until_suspend_e2e(mod, agent, [directive | rest]) do
+    case directive do
+      %Directive.RunInstruction{instruction: instr, result_action: result_action} ->
+        payload =
+          case Jido.Exec.run(instr.action, instr.params) do
+            {:ok, result} ->
+              %{status: :ok, result: result, instruction: instr, effects: [], meta: %{}}
+
+            {:error, reason} ->
+              %{status: :error, reason: reason, instruction: instr, effects: [], meta: %{}}
+          end
+
+        {agent, new_directives} = mod.cmd(agent, {result_action, payload})
+        execute_until_suspend_e2e(mod, agent, new_directives ++ rest)
+
+      %Jido.Composer.Directive.Suspend{} = suspend ->
+        {agent, [suspend | rest]}
+
+      _other ->
+        execute_until_suspend_e2e(mod, agent, rest)
+    end
+  end
 end

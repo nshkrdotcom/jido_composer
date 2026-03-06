@@ -2,8 +2,9 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
   use ExUnit.Case, async: true
 
   alias Jido.Agent.Strategy.State, as: StratState
+  alias Jido.Composer.Checkpoint
+  alias Jido.Composer.ChildRef
   alias Jido.Composer.HITL.ApprovalResponse
-  alias Jido.Composer.HITL.ChildRef
   alias Jido.Composer.Node.HumanNode
 
   alias Jido.Composer.TestActions.{
@@ -259,6 +260,145 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
 
       failed = %{ref | status: :failed}
       assert failed.status == :failed
+    end
+  end
+
+  describe "cascading checkpoint" do
+    test "child checkpointed before parent, both restorable" do
+      # Simulate child agent suspended state
+      child_strat = %{
+        module: Jido.Composer.Workflow.Strategy,
+        status: :waiting,
+        machine: %{status: :approval, context: %{data: "child-data"}},
+        pending_suspension: %{id: "child-suspend-1", reason: :human_input},
+        pending_fan_out: nil
+      }
+
+      child_checkpoint = Checkpoint.prepare_for_checkpoint(child_strat)
+      child_binary = :erlang.term_to_binary(child_checkpoint, [:compressed])
+
+      # Parent tracks child via ChildRef
+      child_ref =
+        ChildRef.new(
+          agent_module: PersistWorkflow,
+          agent_id: "child-001",
+          tag: :etl_worker,
+          checkpoint_key: {"store", "child-001"},
+          status: :paused,
+          suspension_id: "child-suspend-1"
+        )
+
+      parent_strat = %{
+        module: Jido.Composer.Workflow.Strategy,
+        status: :waiting,
+        machine: %{status: :orchestrate, context: %{data: "parent-data"}},
+        pending_suspension: nil,
+        pending_fan_out: nil,
+        children: %{etl_worker: child_ref}
+      }
+
+      parent_checkpoint = Checkpoint.prepare_for_checkpoint(parent_strat)
+      parent_binary = :erlang.term_to_binary(parent_checkpoint, [:compressed])
+
+      # Restore both
+      restored_child = :erlang.binary_to_term(child_binary)
+      restored_parent = :erlang.binary_to_term(parent_binary)
+
+      assert restored_child.machine.context.data == "child-data"
+      assert restored_parent.children.etl_worker.status == :paused
+      assert restored_parent.children.etl_worker.suspension_id == "child-suspend-1"
+    end
+  end
+
+  describe "top-down resume" do
+    test "parent thaws and detects paused children via ChildRef" do
+      child_ref =
+        ChildRef.new(
+          agent_module: PersistWorkflow,
+          agent_id: "child-resume-1",
+          tag: :worker,
+          checkpoint_key: {"store", "child-resume-1"},
+          status: :paused,
+          suspension_id: "suspend-999"
+        )
+
+      parent_strat = %{
+        module: Jido.Composer.Workflow.Strategy,
+        status: :waiting,
+        machine: %{status: :orchestrate, context: %{}},
+        children: %{worker: child_ref}
+      }
+
+      binary = :erlang.term_to_binary(parent_strat, [:compressed])
+      restored = :erlang.binary_to_term(binary)
+
+      # Parent detects paused children
+      paused_children =
+        restored.children
+        |> Enum.filter(fn {_tag, ref} -> ref.status == :paused end)
+
+      assert length(paused_children) == 1
+      {tag, ref} = hd(paused_children)
+      assert tag == :worker
+      assert ref.checkpoint_key == {"store", "child-resume-1"}
+      assert ref.agent_module == PersistWorkflow
+    end
+  end
+
+  describe "fan-out partial completion survives checkpoint" do
+    test "completed and pending branches are preserved" do
+      fan_out_state = %{
+        id: "fo-123",
+        node: %{branches: %{a: :action_a, b: :action_b, c: :action_c}, max_concurrency: 3},
+        pending_branches: MapSet.new([:c]),
+        completed_results: %{a: %{data: 1}, b: %{data: 2}},
+        queued_branches: [],
+        merge: :deep_merge,
+        on_error: :fail_fast
+      }
+
+      strat = %{
+        module: Jido.Composer.Workflow.Strategy,
+        status: :running,
+        machine: %{status: :parallel, context: %{}},
+        pending_fan_out: fan_out_state,
+        pending_suspension: nil
+      }
+
+      cleaned = Checkpoint.prepare_for_checkpoint(strat)
+      binary = :erlang.term_to_binary(cleaned, [:compressed])
+      restored = :erlang.binary_to_term(binary)
+
+      assert restored.pending_fan_out.completed_results == %{a: %{data: 1}, b: %{data: 2}}
+      assert MapSet.member?(restored.pending_fan_out.pending_branches, :c)
+    end
+  end
+
+  describe "schema migration v1 → v2" do
+    test "v1 checkpoint without children field gets default" do
+      v1_state = %{
+        module: Jido.Composer.Workflow.Strategy,
+        status: :waiting,
+        machine: %{status: :approval, context: %{}},
+        pending_suspension: %{id: "s1", reason: :human_input}
+      }
+
+      migrated = Checkpoint.migrate(v1_state, 1)
+
+      assert Map.get(migrated, :children, %{}) == %{}
+      assert migrated.status == :waiting
+    end
+
+    test "v2 checkpoint passes through unchanged" do
+      v2_state = %{
+        module: Jido.Composer.Workflow.Strategy,
+        status: :waiting,
+        machine: %{status: :approval, context: %{}},
+        children: %{worker: %{status: :paused}}
+      }
+
+      migrated = Checkpoint.migrate(v2_state, 2)
+      assert migrated == v2_state
     end
   end
 end

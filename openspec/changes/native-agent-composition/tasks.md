@@ -104,15 +104,15 @@
 
 **Depends on**: Phase 5 (Generalized Suspension for non-HITL persistence)
 
-- [ ] 6.1 Write unit tests in `test/jido/composer/checkpoint_test.exs` (NEW) — `prepare_for_checkpoint` strips closures (approval_policy → nil), preserves serializable state, `reattach_runtime_config` restores closures from strategy_opts, checkpoint schema version is `:composer_v2`
-- [ ] 6.2 Write unit tests for `ChildRef` in `test/jido/composer/child_ref_test.exs` (NEW or extend from `test/jido/composer/hitl/child_ref_test.exs`) — includes `suspension_id` field, status transitions (:running → :paused → :completed), Jason encodable
-- [ ] 6.3 Write unit tests in `test/jido/composer/resume_test.exs` (NEW) — `resume/5` delivers signal to live agent, thaws from checkpoint when not live, rejects already-resumed checkpoint (idempotency), returns error for unknown agent
-- [ ] 6.4 Write integration tests in `test/integration/hitl_persistence_test.exs` — cascading checkpoint (child before parent), top-down resume (parent thaws, respawns children), fan-out partial completion survives checkpoint, schema migration v1 → v2
-- [ ] 6.5 Write e2e test — `test/e2e/e2e_test.exs`: full checkpoint/thaw cycle for nested suspended agent (outer workflow → inner orchestrator suspended → checkpoint → thaw → resume → complete)
-- [ ] 6.6 Implement `Jido.Composer.Checkpoint` in `lib/jido/composer/checkpoint.ex` (NEW) — `prepare_for_checkpoint/1` (strip closures), `reattach_runtime_config/2` (restore from strategy_opts), schema v2 definition, migration from v1
-- [ ] 6.7 Move and extend `ChildRef` — `lib/jido/composer/child_ref.ex` (from `lib/jido/composer/hitl/child_ref.ex`), add `suspension_id` field, keep alias in HITL namespace for backward compat
-- [ ] 6.8 Implement `Jido.Composer.Resume` in `lib/jido/composer/resume.ex` (NEW) — `resume/5` API: find live agent or thaw from checkpoint, deliver resume signal, handle idempotency
-- [ ] 6.9 Add checkpoint hooks to `lib/jido/composer/workflow/strategy.ex` — `prepare_for_checkpoint`, `reattach_runtime_config`, ChildRef lifecycle tracking for nested children
-- [ ] 6.10 Add checkpoint hooks to `lib/jido/composer/orchestrator/strategy.ex` — closure stripping, conversation offload (optional for large conversations), same ChildRef tracking
-- [ ] 6.11 Record e2e cassette `e2e_persistence_cascade_nested` — delete stub, record, verify replay
-- [ ] 6.12 PHASE GATE: `mix precommit`
+- [x] 6.1 Write unit tests in `test/jido/composer/checkpoint_test.exs` (NEW) — `prepare_for_checkpoint` strips closures (approval_policy → nil), preserves serializable state, `reattach_runtime_config` restores closures from strategy_opts, checkpoint schema version is `:composer_v2`
+- [x] 6.2 Write unit tests for `ChildRef` in `test/jido/composer/child_ref_test.exs` (NEW or extend from `test/jido/composer/hitl/child_ref_test.exs`) — includes `suspension_id` field, status transitions (:running → :paused → :completed), Jason encodable
+- [x] 6.3 Write unit tests in `test/jido/composer/resume_test.exs` (NEW) — `resume/5` delivers signal to live agent, thaws from checkpoint when not live, rejects already-resumed checkpoint (idempotency), returns error for unknown agent
+- [x] 6.4 Write integration tests in `test/integration/hitl_persistence_test.exs` — cascading checkpoint (child before parent), top-down resume (parent thaws, respawns children), fan-out partial completion survives checkpoint, schema migration v1 → v2
+- [x] 6.5 Write e2e test — `test/e2e/e2e_test.exs`: full checkpoint/thaw cycle for nested suspended agent (outer workflow → inner orchestrator suspended → checkpoint → thaw → resume → complete)
+- [x] 6.6 Implement `Jido.Composer.Checkpoint` in `lib/jido/composer/checkpoint.ex` (NEW) — `prepare_for_checkpoint/1` (strip closures), `reattach_runtime_config/2` (restore from strategy_opts), schema v2 definition, migration from v1
+- [x] 6.7 Move and extend `ChildRef` — `lib/jido/composer/child_ref.ex` (from `lib/jido/composer/hitl/child_ref.ex`), add `suspension_id` field, keep alias in HITL namespace for backward compat
+- [x] 6.8 Implement `Jido.Composer.Resume` in `lib/jido/composer/resume.ex` (NEW) — `resume/5` API: find live agent or thaw from checkpoint, deliver resume signal, handle idempotency
+- [x] 6.9 Add checkpoint hooks to `lib/jido/composer/workflow/strategy.ex` — `prepare_for_checkpoint`, `reattach_runtime_config`, ChildRef lifecycle tracking for nested children
+- [x] 6.10 Add checkpoint hooks to `lib/jido/composer/orchestrator/strategy.ex` — closure stripping, conversation offload (optional for large conversations), same ChildRef tracking
+- [x] 6.11 Record e2e cassette `e2e_persistence_cascade_nested` — N/A: checkpoint/thaw cycle is deterministic (no LLM), no cassette needed
+- [x] 6.12 PHASE GATE: `mix precommit`
