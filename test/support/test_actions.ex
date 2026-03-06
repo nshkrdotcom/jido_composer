@@ -194,4 +194,44 @@ defmodule Jido.Composer.TestActions do
       {:error, "unrecognized data"}
     end
   end
+
+  defmodule SuspendAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "suspend",
+      description: "Returns a suspend outcome to pause the workflow",
+      schema: [
+        checkpoint: [type: :string, required: false, doc: "Checkpoint label"]
+      ]
+
+    def run(params, _context) do
+      {:ok, %{checkpoint: Map.get(params, :checkpoint, "paused")}, :suspend}
+    end
+  end
+
+  defmodule RateLimitAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "rate_limit_action",
+      description: "Simulates a rate-limited operation that suspends",
+      schema: [
+        tokens: [type: :integer, required: false, doc: "Tokens remaining"]
+      ]
+
+    def run(params, _context) do
+      tokens = Map.get(params, :tokens, 0)
+
+      if tokens > 0 do
+        {:ok, %{processed: true, tokens_remaining: tokens - 1}}
+      else
+        {:ok, suspension} =
+          Jido.Composer.Suspension.new(
+            reason: :rate_limit,
+            metadata: %{retry_after_ms: 5000}
+          )
+
+        {:ok, %{processed: false, __suspension__: suspension}, :suspend}
+      end
+    end
+  end
 end

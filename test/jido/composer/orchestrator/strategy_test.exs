@@ -398,7 +398,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert state.status in [:awaiting_approval, :awaiting_tools_and_approval]
       # Should have a SuspendForHuman directive
       suspend_directives =
-        Enum.filter(directives, &match?(%Jido.Composer.Directive.SuspendForHuman{}, &1))
+        Enum.filter(directives, &match?(%Jido.Composer.Directive.Suspend{}, &1))
 
       assert length(suspend_directives) == 1
     end
@@ -573,6 +573,125 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert restored.status == strat_state.status
       assert restored.query == strat_state.query
       assert restored.iteration == strat_state.iteration
+    end
+  end
+
+  describe "non-HITL suspension" do
+    test "suspended tool call creates suspension with Suspend directive" do
+      tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
+      LLMStub.setup([{:tool_calls, [tool_call]}])
+      agent = init_agent()
+
+      # Start -> LLM call
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir)
+
+      # LLM returns tool call
+      {agent, [tool_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      # Simulate tool returning :suspend (e.g., rate limited)
+      suspend_params = %{
+        status: :suspend,
+        reason: :rate_limit,
+        suspension_metadata: %{timeout: 60_000},
+        arguments: tool_dir.meta,
+        meta: tool_dir.meta
+      }
+
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [make_instruction(:orchestrator_tool_result, suspend_params)],
+          ctx()
+        )
+
+      state = get_state(agent)
+      assert state.status == :awaiting_suspension
+
+      # Should emit a Suspend directive
+      assert [%Jido.Composer.Directive.Suspend{suspension: suspension}] = directives
+      assert suspension.reason == :rate_limit
+      assert suspension.metadata.tool_name == "add"
+      assert suspension.metadata.tool_call_id == "call_1"
+
+      # suspended_calls should have the entry
+      assert map_size(state.suspended_calls) == 1
+      [{suspension_id, entry}] = Map.to_list(state.suspended_calls)
+      assert entry.call.id == "call_1"
+      assert entry.call.name == "add"
+      assert suspension_id == suspension.id
+    end
+
+    test "resume with data continues ReAct loop" do
+      tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 5.0, "amount" => 3.0}}
+
+      LLMStub.setup([
+        {:tool_calls, [tool_call]},
+        {:final_answer, "The result is 8.0"}
+      ])
+
+      agent = init_agent()
+
+      # Start -> LLM call
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add 5+3"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir)
+
+      # LLM returns tool call
+      {agent, [tool_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      # Tool suspends (rate limited)
+      suspend_params = %{
+        status: :suspend,
+        reason: :rate_limit,
+        suspension_metadata: %{},
+        arguments: tool_dir.meta,
+        meta: tool_dir.meta
+      }
+
+      {agent, [%Jido.Composer.Directive.Suspend{suspension: suspension}]} =
+        Strategy.cmd(
+          agent,
+          [make_instruction(:orchestrator_tool_result, suspend_params)],
+          ctx()
+        )
+
+      state = get_state(agent)
+      assert state.status == :awaiting_suspension
+
+      # Resume with data — provides the tool result directly
+      resume_params = %{
+        suspension_id: suspension.id,
+        outcome: :ok,
+        data: %{result: 8.0}
+      }
+
+      {agent, directives} =
+        Strategy.cmd(agent, [make_instruction(:suspend_resume, resume_params)], ctx())
+
+      # Should trigger next LLM call (ReAct loop continues)
+      assert [%Jido.Agent.Directive.RunInstruction{} = llm_dir2] = directives
+      assert llm_dir2.result_action == :orchestrator_llm_result
+
+      state = get_state(agent)
+      assert state.status == :awaiting_llm
+      assert state.suspended_calls == %{}
+      assert state.context == %{add: %{result: 8.0}}
+
+      # Complete the loop — LLM returns final answer
+      llm_result2 = execute_llm_directive(llm_dir2)
+
+      {agent, []} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result2)], ctx())
+
+      state = get_state(agent)
+      assert state.status == :completed
+      assert %NodeIO{type: :text, value: "The result is 8.0"} = state.result
     end
   end
 

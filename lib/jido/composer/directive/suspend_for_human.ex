@@ -1,15 +1,16 @@
 defmodule Jido.Composer.Directive.SuspendForHuman do
   @moduledoc """
-  Directive emitted by strategies when a flow suspends for human input.
+  Convenience wrapper that builds a generalized `Suspend` directive
+  with `reason: :human_input` and an embedded `ApprovalRequest`.
 
-  The runtime interprets this directive to:
-
-  1. Deliver the ApprovalRequest through the configured notification channel
-  2. Optionally start a timeout timer via a Schedule directive
-  3. Optionally hibernate the agent for long-pause resource management
+  Existing code calling `SuspendForHuman.new(approval_request: req)`
+  gets back a `%Suspend{}` directive. The struct is retained for
+  backward-compatible pattern matching in directive execution.
   """
 
+  alias Jido.Composer.Directive.Suspend
   alias Jido.Composer.HITL.ApprovalRequest
+  alias Jido.Composer.Suspension
 
   @enforce_keys [:approval_request]
   defstruct [:approval_request, :notification, hibernate: false]
@@ -20,14 +21,20 @@ defmodule Jido.Composer.Directive.SuspendForHuman do
           hibernate: boolean() | map()
         }
 
-  @spec new(keyword()) :: {:ok, t()} | {:error, String.t()}
+  @doc """
+  Creates a `%Suspend{}` directive wrapping a `Suspension` with
+  `reason: :human_input` and the given `ApprovalRequest`.
+  """
+  @spec new(keyword()) :: {:ok, Suspend.t()} | {:error, String.t()}
   def new(attrs) when is_list(attrs) do
     attrs_map = Map.new(attrs)
 
     with :ok <- validate_approval_request(attrs_map[:approval_request]) do
+      {:ok, suspension} = Suspension.from_approval_request(attrs_map.approval_request)
+
       {:ok,
-       %__MODULE__{
-         approval_request: attrs_map.approval_request,
+       %Suspend{
+         suspension: suspension,
          notification: Map.get(attrs_map, :notification),
          hibernate: Map.get(attrs_map, :hibernate, false)
        }}

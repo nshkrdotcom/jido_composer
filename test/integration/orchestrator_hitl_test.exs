@@ -3,7 +3,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
-  alias Jido.Composer.Directive.SuspendForHuman
+  alias Jido.Composer.Directive.Suspend
   alias Jido.Composer.HITL.ApprovalResponse
   alias Jido.Composer.Orchestrator.Strategy
   alias Jido.Composer.TestSupport.LLMStub
@@ -79,7 +79,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
         run_directive_loop(agent, new_directives ++ rest)
 
-      %SuspendForHuman{} = suspend ->
+      %Suspend{} = suspend ->
         {agent, [suspend | rest]}
 
       _other ->
@@ -123,8 +123,8 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       {agent, remaining} = execute_orchestrator(agent, directives)
 
       # Should have a SuspendForHuman directive
-      assert [%SuspendForHuman{} = suspend | _] = remaining
-      assert suspend.approval_request.prompt =~ "add"
+      assert [%Suspend{} = suspend | _] = remaining
+      assert suspend.suspension.approval_request.prompt =~ "add"
 
       strat = StratState.get(agent)
       assert strat.status == :awaiting_approval
@@ -230,7 +230,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       assert strat.status == :awaiting_approval
 
       # There should be a SuspendForHuman in remaining
-      assert Enum.any?(remaining, &match?(%SuspendForHuman{}, &1))
+      assert Enum.any?(remaining, &match?(%Suspend{}, &1))
     end
 
     test "mixed calls complete after approval" do

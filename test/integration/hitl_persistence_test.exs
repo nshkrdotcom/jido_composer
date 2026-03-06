@@ -55,7 +55,7 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
         {agent, new_directives} = agent_module.cmd(agent, {result_action, payload})
         execute_until_suspend(agent_module, agent, new_directives ++ rest)
 
-      %Jido.Composer.Directive.SuspendForHuman{} = suspend ->
+      %Jido.Composer.Directive.Suspend{} = suspend ->
         {agent, [suspend | rest]}
 
       _other ->
@@ -94,7 +94,7 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
 
       strat = StratState.get(agent)
       assert strat.status == :waiting
-      assert strat.pending_approval != nil
+      assert strat.pending_suspension != nil
 
       # Serialize the entire strategy state
       binary = :erlang.term_to_binary(strat, [:compressed])
@@ -104,8 +104,11 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
       # Deserialize
       restored = :erlang.binary_to_term(binary)
       assert restored.status == :waiting
-      assert restored.pending_approval.id == strat.pending_approval.id
-      assert restored.pending_approval.prompt == "Approve processing?"
+
+      assert restored.pending_suspension.approval_request.id ==
+               strat.pending_suspension.approval_request.id
+
+      assert restored.pending_suspension.approval_request.prompt == "Approve processing?"
       assert restored.machine.status == :approval
       assert restored.machine.context.working[:tag] == "test"
     end
@@ -143,12 +146,14 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
       # Verify restored state is usable
       restored = StratState.get(restored_agent)
       assert restored.status == :waiting
-      assert restored.pending_approval.id == strat.pending_approval.id
+
+      assert restored.pending_suspension.approval_request.id ==
+               strat.pending_suspension.approval_request.id
 
       # Resume with approval
       {:ok, response} =
         ApprovalResponse.new(
-          request_id: restored.pending_approval.id,
+          request_id: restored.pending_suspension.approval_request.id,
           decision: :approved
         )
 
@@ -170,7 +175,7 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
       {agent, _remaining} = run_to_suspend(agent)
 
       strat = StratState.get(agent)
-      request_id = strat.pending_approval.id
+      request_id = strat.pending_suspension.approval_request.id
 
       # First resume
       {:ok, response} =

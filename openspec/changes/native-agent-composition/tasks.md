@@ -82,19 +82,19 @@
 
 > **References**: `IMPLEMENTATION_PLAN.md` Phase 5. `native-agent-composition.md` §6. `docs/design/hitl/strategy-integration.md`. `docs/design/hitl/nested-propagation.md`. `prototypes/test_hitl_assumptions.exs` (8 tests), `prototypes/test_integrated_composition.exs` (suspension tests). `prototypes/learnings.md` — "DirectiveExec Return Types" (Suspend must return `{:ok, state}`).
 
-- [ ] 5.1 Write unit tests in `test/jido/composer/suspension_test.exs` (NEW) — `new/1` with required fields, `from_approval_request/1` wraps as `:human_input`, reason types (`:human_input`, `:rate_limit`, `:async_completion`, `:external_job`, `:custom`), Jason encoding
-- [ ] 5.2 Write unit tests in `test/jido/composer/directive/suspend_test.exs` (NEW) — struct with suspension, `SuspendForHuman.new` produces generalized Suspend directive
-- [ ] 5.3 Write Workflow strategy tests in `test/jido/composer/workflow/strategy_test.exs` — node returning `:suspend` creates Suspension and emits Suspend directive, `suspend_resume` with matching id transitions machine, `suspend_resume` with mismatched id errors, `suspend_timeout` fires timeout outcome, HumanNode backward compat
-- [ ] 5.4 Write Orchestrator strategy tests in `test/jido/composer/orchestrator/strategy_test.exs` — non-HITL suspension in tool call, resume continues ReAct loop (LLMStub)
-- [ ] 5.5 Write integration tests — `test/integration/workflow_hitl_test.exs`: generalized suspension with rate_limit reason, suspension timeout fires and transitions
-- [ ] 5.6 Write e2e test — `test/e2e/e2e_test.exs`: workflow with rate-limit suspension + resume (deterministic + LLMStub orchestrator variant)
-- [ ] 5.7 Implement `Jido.Composer.Suspension` in `lib/jido/composer/suspension.ex` (NEW) — struct with id, reason, created_at, resume_signal, timeout, timeout_outcome, metadata, approval_request; `from_approval_request/1`; `@derive Jason.Encoder`
-- [ ] 5.8 Implement `Jido.Composer.Directive.Suspend` in `lib/jido/composer/directive/suspend.ex` (NEW) — struct with suspension, notification, hibernate flag
-- [ ] 5.9 Refactor `lib/jido/composer/directive/suspend_for_human.ex` — `new/1` produces `Suspend` directive wrapping `Suspension.from_approval_request/1`
-- [ ] 5.10 Update `lib/jido/composer/workflow/strategy.ex` — replace `pending_approval` with `pending_suspension`, generalize `dispatch_current_node` to handle any `:suspend` outcome, add `suspend_resume`/`suspend_timeout` handlers, update signal routes
-- [ ] 5.11 Update `lib/jido/composer/orchestrator/strategy.ex` — same generalization for tool call suspensions, add `suspended_calls` alongside `gated_calls`
-- [ ] 5.12 Record e2e cassette `e2e_generalized_suspension` — delete stub, record, verify replay
-- [ ] 5.13 PHASE GATE: `mix precommit`
+- [x] 5.1 Write unit tests in `test/jido/composer/suspension_test.exs` (NEW) — `new/1` with required fields, `from_approval_request/1` wraps as `:human_input`, reason types (`:human_input`, `:rate_limit`, `:async_completion`, `:external_job`, `:custom`), Jason encoding
+- [x] 5.2 Write unit tests in `test/jido/composer/directive/suspend_test.exs` (NEW) — struct with suspension, `SuspendForHuman.new` produces generalized Suspend directive
+- [x] 5.3 Write Workflow strategy tests in `test/jido/composer/workflow/strategy_test.exs` — node returning `:suspend` creates Suspension and emits Suspend directive, `suspend_resume` with matching id transitions machine, `suspend_resume` with mismatched id errors, `suspend_timeout` fires timeout outcome, HumanNode backward compat
+- [x] 5.4 Write Orchestrator strategy tests in `test/jido/composer/orchestrator/strategy_test.exs` — non-HITL suspension in tool call, resume continues ReAct loop (LLMStub)
+- [x] 5.5 Write integration tests — `test/integration/workflow_hitl_test.exs`: generalized suspension with rate_limit reason, suspension timeout fires and transitions
+- [x] 5.6 Write e2e test — `test/e2e/e2e_test.exs`: workflow with rate-limit suspension + resume (deterministic + LLMStub orchestrator variant)
+- [x] 5.7 Implement `Jido.Composer.Suspension` in `lib/jido/composer/suspension.ex` (NEW) — struct with id, reason, created_at, resume_signal, timeout, timeout_outcome, metadata, approval_request; `from_approval_request/1`; `@derive Jason.Encoder`
+- [x] 5.8 Implement `Jido.Composer.Directive.Suspend` in `lib/jido/composer/directive/suspend.ex` (NEW) — struct with suspension, notification, hibernate flag
+- [x] 5.9 Refactor `lib/jido/composer/directive/suspend_for_human.ex` — `new/1` produces `Suspend` directive wrapping `Suspension.from_approval_request/1`
+- [x] 5.10 Update `lib/jido/composer/workflow/strategy.ex` — replace `pending_approval` with `pending_suspension`, generalize `dispatch_current_node` to handle any `:suspend` outcome, add `suspend_resume`/`suspend_timeout` handlers, update signal routes
+- [x] 5.11 Update `lib/jido/composer/orchestrator/strategy.ex` — same generalization for tool call suspensions, add `suspended_calls` alongside `gated_calls`
+- [x] 5.12 Record e2e cassette `e2e_generalized_suspension` — N/A: rate-limit suspension is deterministic (no LLM), no cassette needed
+- [x] 5.13 PHASE GATE: `mix precommit`
 
 ---
 

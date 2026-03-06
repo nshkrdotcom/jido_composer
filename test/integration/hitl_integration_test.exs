@@ -3,7 +3,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
 
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
-  alias Jido.Composer.Directive.SuspendForHuman
+  alias Jido.Composer.Directive.Suspend
   alias Jido.Composer.HITL.{ApprovalResponse, ChildRef}
   alias Jido.Composer.Node.HumanNode
   alias Jido.Composer.Orchestrator.Strategy, as: OrchStrategy
@@ -95,7 +95,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
         # For testing, return the spawn directive so the test can control it
         {agent, [spawn_dir | rest]}
 
-      %SuspendForHuman{} = suspend ->
+      %Suspend{} = suspend ->
         {agent, [suspend | rest]}
 
       _other ->
@@ -152,7 +152,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
         execute_workflow_directives(InnerWorkflow, inner_agent, inner_directives)
 
       # Inner workflow should be suspended at HITL
-      assert [%SuspendForHuman{} | _] = inner_remaining
+      assert [%Suspend{} | _] = inner_remaining
       inner_strat = StratState.get(inner_agent)
       assert inner_strat.status == :waiting
       assert inner_strat.machine.status == :approval
@@ -173,7 +173,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
 
       # Get pending approval
       inner_strat = StratState.get(inner_agent)
-      request_id = inner_strat.pending_approval.id
+      request_id = inner_strat.pending_suspension.approval_request.id
 
       # Approve
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
@@ -217,7 +217,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
 
       assert outer_restored.machine.status == :process
       assert inner_restored.status == :waiting
-      assert inner_restored.pending_approval != nil
+      assert inner_restored.pending_suspension != nil
     end
 
     test "ChildRef can track child hibernation status" do
@@ -267,7 +267,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
       restored_agent = StratState.put(fresh_agent, restored_strat)
 
       # Resume with approval
-      request_id = restored_strat.pending_approval.id
+      request_id = restored_strat.pending_suspension.approval_request.id
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
 
       {resumed_agent, directives} =
@@ -366,7 +366,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
 
         run_orch_directives(agent, new_directives ++ rest)
 
-      %SuspendForHuman{} = suspend ->
+      %Suspend{} = suspend ->
         {agent, [suspend | rest]}
 
       _other ->

@@ -12,12 +12,14 @@ defmodule Jido.Composer.Workflow.Strategy do
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.Composer.Context
   alias Jido.Composer.Directive.FanOutBranch
+  alias Jido.Composer.Directive.Suspend, as: SuspendDirective
   alias Jido.Composer.Directive.SuspendForHuman
   alias Jido.Composer.HITL.{ApprovalRequest, ApprovalResponse}
   alias Jido.Composer.Node.ActionNode
   alias Jido.Composer.Node.AgentNode
   alias Jido.Composer.Node.FanOutNode
   alias Jido.Composer.Node.HumanNode
+  alias Jido.Composer.Suspension
   alias Jido.Composer.Workflow.Machine
 
   # -- init/2 --
@@ -42,7 +44,7 @@ defmodule Jido.Composer.Workflow.Strategy do
         machine: machine,
         pending_child: nil,
         child_request_id: nil,
-        pending_approval: nil,
+        pending_suspension: nil,
         pending_fan_out: nil,
         ambient_keys: opts[:ambient] || [],
         fork_fns: opts[:fork_fns] || %{}
@@ -72,6 +74,9 @@ defmodule Jido.Composer.Workflow.Strategy do
     params = instr.params
 
     case params do
+      %{status: :ok, result: result, outcome: :suspend} ->
+        handle_node_suspend(agent, result, strat)
+
       %{status: :ok, result: result} ->
         outcome = Map.get(params, :outcome, :ok)
         machine = Machine.apply_result(strat.machine, result)
@@ -103,9 +108,6 @@ defmodule Jido.Composer.Workflow.Strategy do
   end
 
   def cmd(agent, [%Jido.Instruction{action: :workflow_child_started} | _rest], _ctx) do
-    # Child agent has started — no action needed for sync mode.
-    # The SpawnAgent directive already contains the context; the AgentServer
-    # handles delivery to the child.
     {agent, []}
   end
 
@@ -142,7 +144,6 @@ defmodule Jido.Composer.Workflow.Strategy do
   end
 
   def cmd(agent, [%Jido.Instruction{action: :workflow_child_exit} | _rest], _ctx) do
-    # Child agent has exited — cleanup if needed
     {agent, []}
   end
 
@@ -153,7 +154,6 @@ defmodule Jido.Composer.Workflow.Strategy do
     result = params[:result]
     fan_out = strat.pending_fan_out
 
-    # If fan_out was already cancelled (fail_fast), ignore late results
     if is_nil(fan_out) do
       {agent, []}
     else
@@ -161,14 +161,80 @@ defmodule Jido.Composer.Workflow.Strategy do
     end
   end
 
+  # Generalized suspend resume
+  def cmd(agent, [%Jido.Instruction{action: :suspend_resume} = instr | _rest], _ctx) do
+    strat = StratState.get(agent)
+    params = instr.params
+
+    case strat.pending_suspension do
+      nil ->
+        {agent, [%Directive.Error{error: %RuntimeError{message: "No pending suspension"}}]}
+
+      %Suspension{id: id} = suspension ->
+        suspension_id = params[:suspension_id]
+
+        if suspension_id != id do
+          {agent,
+           [
+             %Directive.Error{
+               error: %RuntimeError{
+                 message:
+                   "Suspension ID mismatch: expected #{inspect(id)}, got #{inspect(suspension_id)}"
+               }
+             }
+           ]}
+        else
+          case suspension.reason do
+            :human_input ->
+              handle_hitl_resume(agent, suspension, params)
+
+            _other ->
+              handle_generic_resume(agent, params)
+          end
+        end
+    end
+  end
+
+  # Generalized suspend timeout
+  def cmd(agent, [%Jido.Instruction{action: :suspend_timeout} = instr | _rest], _ctx) do
+    strat = StratState.get(agent)
+    suspension_id = instr.params[:suspension_id]
+
+    case strat.pending_suspension do
+      %Suspension{id: ^suspension_id} = suspension ->
+        timeout_outcome = suspension.timeout_outcome
+
+        agent =
+          StratState.update(agent, fn s ->
+            %{s | status: :running, pending_suspension: nil}
+          end)
+
+        strat = StratState.get(agent)
+
+        case Machine.transition(strat.machine, timeout_outcome) do
+          {:ok, machine} ->
+            agent = put_machine(agent, machine)
+            handle_after_transition(agent)
+
+          {:error, _reason} ->
+            agent = StratState.set_status(agent, :failure)
+            {agent, []}
+        end
+
+      _ ->
+        {agent, []}
+    end
+  end
+
+  # Legacy HITL response — delegate to suspend_resume
   def cmd(agent, [%Jido.Instruction{action: :hitl_response} = instr | _rest], _ctx) do
     strat = StratState.get(agent)
 
-    case strat.pending_approval do
+    case strat.pending_suspension do
       nil ->
         {agent, [%Directive.Error{error: %RuntimeError{message: "No pending HITL request"}}]}
 
-      %ApprovalRequest{} = request ->
+      %Suspension{reason: :human_input} = suspension ->
         response_data = instr.params
 
         {:ok, response} =
@@ -181,7 +247,7 @@ defmodule Jido.Composer.Workflow.Strategy do
             responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
           )
 
-        case ApprovalResponse.validate(response, request) do
+        case ApprovalResponse.validate(response, suspension.approval_request) do
           :ok ->
             handle_hitl_decision(agent, response)
 
@@ -193,24 +259,31 @@ defmodule Jido.Composer.Workflow.Strategy do
                }
              ]}
         end
+
+      %Suspension{} ->
+        {agent,
+         [%Directive.Error{error: %RuntimeError{message: "Pending suspension is not HITL"}}]}
     end
   end
 
+  # Legacy HITL timeout — delegate to suspend_timeout
   def cmd(agent, [%Jido.Instruction{action: :hitl_timeout} = instr | _rest], _ctx) do
     strat = StratState.get(agent)
     request_id = instr.params[:request_id]
 
-    case strat.pending_approval do
-      %ApprovalRequest{id: ^request_id} = request ->
-        timeout_outcome = request.timeout_outcome
+    case strat.pending_suspension do
+      %Suspension{reason: :human_input, approval_request: %ApprovalRequest{id: ^request_id}} =
+          suspension ->
+        timeout_outcome = suspension.timeout_outcome
 
         agent =
-          StratState.update(agent, fn s -> %{s | status: :running, pending_approval: nil} end)
+          StratState.update(agent, fn s ->
+            %{s | status: :running, pending_suspension: nil}
+          end)
 
         strat = StratState.get(agent)
-        machine = strat.machine
 
-        case Machine.transition(machine, timeout_outcome) do
+        case Machine.transition(strat.machine, timeout_outcome) do
           {:ok, machine} ->
             agent = put_machine(agent, machine)
             handle_after_transition(agent)
@@ -221,7 +294,6 @@ defmodule Jido.Composer.Workflow.Strategy do
         end
 
       _ ->
-        # Already resolved or mismatched — ignore
         {agent, []}
     end
   end
@@ -240,6 +312,8 @@ defmodule Jido.Composer.Workflow.Strategy do
       {"jido.agent.child.started", {:strategy_cmd, :workflow_child_started}},
       {"jido.agent.child.exit", {:strategy_cmd, :workflow_child_exit}},
       {"composer.fan_out.branch_result", {:strategy_cmd, :fan_out_branch_result}},
+      {"composer.suspend.resume", {:strategy_cmd, :suspend_resume}},
+      {"composer.suspend.timeout", {:strategy_cmd, :suspend_timeout}},
       {"composer.hitl.response", {:strategy_cmd, :hitl_response}},
       {"composer.hitl.timeout", {:strategy_cmd, :hitl_timeout}}
     ]
@@ -257,12 +331,18 @@ defmodule Jido.Composer.Workflow.Strategy do
     }
 
     details =
-      case Map.get(strat, :pending_approval) do
-        %ApprovalRequest{} = request ->
+      case Map.get(strat, :pending_suspension) do
+        %Suspension{reason: :human_input, approval_request: %ApprovalRequest{} = request} ->
           Map.merge(details, %{
             reason: :awaiting_approval,
             request_id: request.id,
             node_name: request.node_name
+          })
+
+        %Suspension{} = suspension ->
+          Map.merge(details, %{
+            reason: suspension.reason,
+            suspension_id: suspension.id
           })
 
         _ ->
@@ -330,28 +410,7 @@ defmodule Jido.Composer.Workflow.Strategy do
         {agent, [directive]}
 
       %HumanNode{} = human_node ->
-        flat_context = Context.to_flat_map(strat.machine.context)
-        {:ok, updated_context, :suspend} = HumanNode.run(human_node, flat_context)
-
-        # Extract and enrich the ApprovalRequest
-        request = updated_context.__approval_request__
-
-        request = %{
-          request
-          | agent_id: Map.get(strat, :agent_id),
-            agent_module: Map.get(strat, :agent_module),
-            workflow_state: strat.machine.status,
-            node_name: HumanNode.name(human_node)
-        }
-
-        # Store pending approval, set status to :waiting
-        agent =
-          StratState.update(agent, fn s ->
-            %{s | status: :waiting, pending_approval: request}
-          end)
-
-        {:ok, directive} = SuspendForHuman.new(approval_request: request)
-        {agent, [directive]}
+        dispatch_human_node(agent, human_node, strat)
 
       %FanOutNode{} = fan_out_node ->
         dispatch_fan_out(agent, fan_out_node, strat)
@@ -361,8 +420,124 @@ defmodule Jido.Composer.Workflow.Strategy do
     end
   end
 
+  defp dispatch_human_node(agent, human_node, strat) do
+    flat_context = Context.to_flat_map(strat.machine.context)
+    {:ok, updated_context, :suspend} = HumanNode.run(human_node, flat_context)
+
+    # Extract and enrich the ApprovalRequest
+    request = updated_context.__approval_request__
+
+    request = %{
+      request
+      | agent_id: Map.get(strat, :agent_id),
+        agent_module: Map.get(strat, :agent_module),
+        workflow_state: strat.machine.status,
+        node_name: HumanNode.name(human_node)
+    }
+
+    # Create Suspension from ApprovalRequest
+    {:ok, suspension} = Suspension.from_approval_request(request)
+
+    # Store pending suspension, set status to :waiting
+    agent =
+      StratState.update(agent, fn s ->
+        %{s | status: :waiting, pending_suspension: suspension}
+      end)
+
+    {:ok, directive} = SuspendForHuman.new(approval_request: request)
+    {agent, [directive]}
+  end
+
+  defp handle_node_suspend(agent, result, strat) do
+    suspension =
+      cond do
+        is_map(result) and Map.has_key?(result, :__suspension__) ->
+          result.__suspension__
+
+        is_map(result) and Map.has_key?(result, :__approval_request__) ->
+          request = result.__approval_request__
+          {:ok, suspension} = Suspension.from_approval_request(request)
+          suspension
+
+        true ->
+          {:ok, suspension} =
+            Suspension.new(reason: :custom, metadata: %{node_state: strat.machine.status})
+
+          suspension
+      end
+
+    # Merge non-suspension data into machine context
+    clean_result =
+      result
+      |> Map.delete(:__suspension__)
+      |> Map.delete(:__approval_request__)
+
+    machine = Machine.apply_result(strat.machine, clean_result)
+    agent = put_machine(agent, machine)
+
+    agent =
+      StratState.update(agent, fn s ->
+        %{s | status: :waiting, pending_suspension: suspension}
+      end)
+
+    directive = %SuspendDirective{suspension: suspension}
+    {agent, [directive]}
+  end
+
+  defp handle_hitl_resume(agent, suspension, params) do
+    response_data = params[:response_data] || params
+
+    {:ok, response} =
+      ApprovalResponse.new(
+        request_id: response_data[:request_id] || suspension.approval_request.id,
+        decision: response_data[:decision] || response_data[:outcome],
+        data: Map.get(response_data, :data),
+        respondent: Map.get(response_data, :respondent),
+        comment: Map.get(response_data, :comment),
+        responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
+      )
+
+    case ApprovalResponse.validate(response, suspension.approval_request) do
+      :ok ->
+        handle_hitl_decision(agent, response)
+
+      {:error, reason} ->
+        {agent,
+         [
+           %Directive.Error{
+             error: %RuntimeError{message: "HITL validation failed: #{reason}"}
+           }
+         ]}
+    end
+  end
+
+  defp handle_generic_resume(agent, params) do
+    outcome = params[:outcome] || :ok
+    data = params[:data] || %{}
+
+    strat = StratState.get(agent)
+    current_ctx = strat.machine.context
+    merged_working = DeepMerge.deep_merge(current_ctx.working, data)
+    machine = %{strat.machine | context: %{current_ctx | working: merged_working}}
+
+    agent =
+      StratState.update(agent, fn s ->
+        %{s | status: :running, pending_suspension: nil}
+      end)
+
+    case Machine.transition(machine, outcome) do
+      {:ok, machine} ->
+        agent = put_machine(agent, machine)
+        handle_after_transition(agent)
+
+      {:error, _reason} ->
+        agent = put_machine(agent, machine)
+        agent = StratState.set_status(agent, :failure)
+        {agent, []}
+    end
+  end
+
   defp handle_hitl_decision(agent, %ApprovalResponse{} = response) do
-    # Merge response data into machine context working layer
     strat = StratState.get(agent)
 
     hitl_data = %{
@@ -379,14 +554,13 @@ defmodule Jido.Composer.Workflow.Strategy do
     merged_working = DeepMerge.deep_merge(current_ctx.working, hitl_data)
     machine = %{strat.machine | context: %{current_ctx | working: merged_working}}
 
-    # Use decision as transition outcome
     case Machine.transition(machine, response.decision) do
       {:ok, machine} ->
         agent = put_machine(agent, machine)
 
         agent =
           StratState.update(agent, fn s ->
-            %{s | status: :running, pending_approval: nil}
+            %{s | status: :running, pending_suspension: nil}
           end)
 
         handle_after_transition(agent)
@@ -396,7 +570,7 @@ defmodule Jido.Composer.Workflow.Strategy do
         agent = StratState.set_status(agent, :failure)
 
         agent =
-          StratState.update(agent, fn s -> %{s | pending_approval: nil} end)
+          StratState.update(agent, fn s -> %{s | pending_suspension: nil} end)
 
         {agent, []}
     end
@@ -407,10 +581,8 @@ defmodule Jido.Composer.Workflow.Strategy do
     fork_fns = Map.get(strat, :fork_fns, %{})
 
     if ambient_keys == [] and fork_fns == %{} do
-      # No ambient/fork config — just merge params into working
       %{current_ctx | working: Map.merge(current_ctx.working, params)}
     else
-      # Extract ambient keys from params
       {ambient_vals, working_vals} = Map.split(params, ambient_keys)
       ambient = Map.merge(current_ctx.ambient, ambient_vals)
       working = Map.merge(current_ctx.working, working_vals)
@@ -440,7 +612,6 @@ defmodule Jido.Composer.Workflow.Strategy do
 
         fan_out = %{fan_out | completed_results: completed, pending_branches: pending}
 
-        # Dispatch queued branches if slots are available
         {fan_out, new_directives} = dispatch_queued_branches(fan_out, strat)
 
         agent =
@@ -566,7 +737,6 @@ defmodule Jido.Composer.Workflow.Strategy do
     fan_out = strat.pending_fan_out
 
     if MapSet.size(fan_out.pending_branches) == 0 and fan_out.queued_branches == [] do
-      # All branches done — merge results and transition
       merged = FanOutNode.merge_results(fan_out.completed_results, fan_out.merge)
       machine = Machine.apply_result(strat.machine, merged)
 
@@ -588,7 +758,6 @@ defmodule Jido.Composer.Workflow.Strategy do
   end
 
   defp cancel_and_fail(agent, fan_out, _reason) do
-    # Emit StopChild directives for pending agent branches
     stop_directives =
       fan_out.pending_branches
       |> MapSet.to_list()

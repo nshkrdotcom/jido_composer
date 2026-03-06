@@ -12,12 +12,14 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
+  alias Jido.Composer.Directive.Suspend, as: SuspendDirective
   alias Jido.Composer.Directive.SuspendForHuman
   alias Jido.Composer.HITL.{ApprovalRequest, ApprovalResponse}
   alias Jido.Composer.Node.ActionNode
   alias Jido.Composer.Node.AgentNode
   alias Jido.Composer.NodeIO
   alias Jido.Composer.Orchestrator.AgentTool
+  alias Jido.Composer.Suspension
 
   # -- init/2 --
 
@@ -62,7 +64,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         gated_node_names: gated_node_names,
         approval_policy: approval_policy,
         rejection_policy: opts[:rejection_policy] || :continue_siblings,
-        gated_calls: %{}
+        gated_calls: %{},
+        suspended_calls: %{}
       })
 
     {agent, []}
@@ -113,39 +116,45 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     call_id = meta[:call_id] || meta["call_id"]
     tool_name = meta[:tool_name] || meta["tool_name"]
 
-    tool_result =
-      case params[:status] do
-        :ok ->
-          AgentTool.to_tool_result(call_id, tool_name, {:ok, params[:result]})
+    case params[:status] do
+      :suspend ->
+        handle_tool_suspension(agent, call_id, tool_name, params)
 
-        :error ->
-          AgentTool.to_tool_result(call_id, tool_name, {:error, params[:result]})
-      end
+      status when status in [:ok, :error] ->
+        tool_result =
+          case status do
+            :ok ->
+              AgentTool.to_tool_result(call_id, tool_name, {:ok, params[:result]})
 
-    # Scope result under tool name in context (only on success)
-    scope_key = scope_atom(agent, tool_name)
+            :error ->
+              AgentTool.to_tool_result(call_id, tool_name, {:error, params[:result]})
+          end
 
-    scoped_result =
-      case params[:status] do
-        :ok -> params[:result] || %{}
-        :error -> %{error: inspect(params[:result])}
-      end
+        # Scope result under tool name in context (only on success)
+        scope_key = scope_atom(agent, tool_name)
 
-    agent =
-      StratState.update(agent, fn s ->
-        new_pending = List.delete(s.pending_tool_calls, call_id)
-        new_completed = s.completed_tool_results ++ [tool_result]
-        new_context = deep_merge(s.context, %{scope_key => scoped_result})
+        scoped_result =
+          case status do
+            :ok -> params[:result] || %{}
+            :error -> %{error: inspect(params[:result])}
+          end
 
-        %{
-          s
-          | pending_tool_calls: new_pending,
-            completed_tool_results: new_completed,
-            context: new_context
-        }
-      end)
+        agent =
+          StratState.update(agent, fn s ->
+            new_pending = List.delete(s.pending_tool_calls, call_id)
+            new_completed = s.completed_tool_results ++ [tool_result]
+            new_context = deep_merge(s.context, %{scope_key => scoped_result})
 
-    check_all_tools_done(agent)
+            %{
+              s
+              | pending_tool_calls: new_pending,
+                completed_tool_results: new_completed,
+                context: new_context
+            }
+          end)
+
+        check_all_tools_done(agent)
+    end
   end
 
   def cmd(agent, [%Jido.Instruction{action: :orchestrator_child_started} | _], _ctx) do
@@ -254,6 +263,100 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     end
   end
 
+  # Generalized suspend resume for orchestrator tool calls
+  def cmd(agent, [%Jido.Instruction{action: :suspend_resume} = instr | _], _ctx) do
+    strat = StratState.get(agent)
+    params = instr.params
+    suspension_id = params[:suspension_id]
+
+    case Map.get(strat.suspended_calls, suspension_id) do
+      nil ->
+        {agent,
+         [
+           %Directive.Error{
+             error: %RuntimeError{message: "No suspended call for #{inspect(suspension_id)}"}
+           }
+         ]}
+
+      %{suspension: _suspension, call: call} ->
+        # Resume the suspended tool call — build and dispatch the directive
+        outcome = params[:outcome] || :ok
+        data = params[:data]
+
+        if outcome == :ok and data != nil do
+          # Provide data directly as tool result
+          tool_result = AgentTool.to_tool_result(call.id, call.name, {:ok, data})
+          scope_key = scope_atom(agent, call.name)
+
+          agent =
+            StratState.update(agent, fn s ->
+              new_suspended = Map.delete(s.suspended_calls, suspension_id)
+              new_completed = s.completed_tool_results ++ [tool_result]
+              new_context = deep_merge(s.context, %{scope_key => data})
+
+              %{
+                s
+                | suspended_calls: new_suspended,
+                  completed_tool_results: new_completed,
+                  context: new_context
+              }
+            end)
+
+          check_all_tools_done(agent)
+        else
+          # Re-dispatch the tool call
+          agent =
+            StratState.update(agent, fn s ->
+              new_suspended = Map.delete(s.suspended_calls, suspension_id)
+              new_pending = s.pending_tool_calls ++ [call.id]
+              %{s | suspended_calls: new_suspended, pending_tool_calls: new_pending}
+            end)
+
+          state = StratState.get(agent)
+          directive = build_tool_directive(call, state.nodes)
+          {agent, [directive]}
+        end
+    end
+  end
+
+  # Generalized suspend timeout for orchestrator
+  def cmd(agent, [%Jido.Instruction{action: :suspend_timeout} = instr | _], _ctx) do
+    strat = StratState.get(agent)
+    suspension_id = instr.params[:suspension_id]
+
+    case Map.get(strat.suspended_calls, suspension_id) do
+      %{call: call} ->
+        # Treat as error result for the tool call
+        tool_result =
+          AgentTool.to_tool_result(
+            call.id,
+            call.name,
+            {:error, "Suspension timed out"}
+          )
+
+        scope_key = scope_atom(agent, call.name)
+
+        agent =
+          StratState.update(agent, fn s ->
+            new_suspended = Map.delete(s.suspended_calls, suspension_id)
+            new_completed = s.completed_tool_results ++ [tool_result]
+            new_context = deep_merge(s.context, %{scope_key => %{error: "suspension_timeout"}})
+
+            %{
+              s
+              | suspended_calls: new_suspended,
+                completed_tool_results: new_completed,
+                context: new_context
+            }
+          end)
+
+        check_all_tools_done(agent)
+
+      nil ->
+        {agent, []}
+    end
+  end
+
   def cmd(agent, _instructions, _ctx) do
     {agent, []}
   end
@@ -268,6 +371,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       {"jido.agent.child.started", {:strategy_cmd, :orchestrator_child_started}},
       {"jido.agent.child.exit", {:strategy_cmd, :orchestrator_child_exit}},
       {"composer.fan_out.branch_result", {:strategy_cmd, :fan_out_branch_result}},
+      {"composer.suspend.resume", {:strategy_cmd, :suspend_resume}},
+      {"composer.suspend.timeout", {:strategy_cmd, :suspend_timeout}},
       {"composer.hitl.response", {:strategy_cmd, :hitl_response}},
       {"composer.hitl.timeout", {:strategy_cmd, :hitl_timeout}}
     ]
@@ -592,18 +697,69 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     end
   end
 
-  defp check_all_tools_done(agent) do
+  defp handle_tool_suspension(agent, call_id, tool_name, params) do
+    reason = params[:reason] || :custom
+    suspension_meta = params[:suspension_metadata] || %{}
+
+    {:ok, suspension} =
+      Suspension.new(
+        reason: reason,
+        timeout: Map.get(suspension_meta, :timeout, :infinity),
+        resume_signal: "composer.suspend.resume",
+        metadata: Map.merge(suspension_meta, %{tool_call_id: call_id, tool_name: tool_name})
+      )
+
+    call = %{id: call_id, name: tool_name, arguments: params[:arguments] || %{}}
+
+    agent =
+      StratState.update(agent, fn s ->
+        new_pending = List.delete(s.pending_tool_calls, call_id)
+
+        new_suspended =
+          Map.put(s.suspended_calls, suspension.id, %{suspension: suspension, call: call})
+
+        %{s | pending_tool_calls: new_pending, suspended_calls: new_suspended}
+      end)
+
+    directive = %SuspendDirective{suspension: suspension}
+
+    # Check if other tools are still pending
     state = StratState.get(agent)
 
     if state.pending_tool_calls == [] and state.gated_calls == %{} do
+      agent = StratState.update(agent, fn s -> %{s | status: :awaiting_suspension} end)
+      {agent, [directive]}
+    else
+      {agent, [directive]}
+    end
+  end
+
+  defp check_all_tools_done(agent) do
+    state = StratState.get(agent)
+
+    all_clear =
+      state.pending_tool_calls == [] and
+        state.gated_calls == %{} and
+        state.suspended_calls == %{}
+
+    if all_clear do
       agent = StratState.update(agent, fn s -> %{s | status: :awaiting_llm} end)
       emit_llm_call(agent)
     else
       new_status =
         cond do
-          state.gated_calls == %{} -> :awaiting_tools
-          state.pending_tool_calls == [] -> :awaiting_approval
-          true -> :awaiting_tools_and_approval
+          state.suspended_calls != %{} and state.pending_tool_calls == [] and
+              state.gated_calls == %{} ->
+            :awaiting_suspension
+
+          state.gated_calls == %{} and state.suspended_calls == %{} ->
+            :awaiting_tools
+
+          state.pending_tool_calls == [] and state.suspended_calls == %{} ->
+            :awaiting_approval
+
+          true ->
+            :awaiting_tools_and_approval
         end
 
       agent = StratState.update(agent, fn s -> %{s | status: new_status} end)

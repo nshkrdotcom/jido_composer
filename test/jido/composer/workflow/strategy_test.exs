@@ -818,4 +818,430 @@ defmodule Jido.Composer.Workflow.StrategyTest do
       assert restored.status == strat_state.status
     end
   end
+
+  describe "generalized suspension" do
+    alias Jido.Composer.Directive.Suspend, as: SuspendDirective
+    alias Jido.Composer.Suspension
+    alias Jido.Composer.Node.HumanNode
+
+    defp init_suspend_workflow do
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{
+            prepare: {:action, Jido.Composer.TestActions.AddAction},
+            awaiting: {:action, Jido.Composer.TestActions.SuspendAction},
+            finalize: {:action, Jido.Composer.TestActions.MultiplyAction}
+          },
+          transitions: %{
+            {:prepare, :ok} => :awaiting,
+            {:awaiting, :ok} => :finalize,
+            {:awaiting, :timeout} => :failed,
+            {:finalize, :ok} => :done,
+            {:_, :error} => :failed
+          },
+          initial: :prepare
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _directives} = Strategy.init(agent, ctx)
+      {agent, ctx}
+    end
+
+    defp advance_to_suspend(agent, ctx) do
+      # Start workflow
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [%Jido.Instruction{action: :workflow_start, params: %{value: 1.0, amount: 2.0}}],
+          ctx
+        )
+
+      # Simulate successful result from prepare node -> transitions to :awaiting
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_node_result,
+              params: %{
+                status: :ok,
+                result: %{result: 3.0},
+                instruction: %Jido.Instruction{
+                  action: Jido.Composer.TestActions.AddAction,
+                  params: %{}
+                },
+                effects: [],
+                meta: %{}
+              }
+            }
+          ],
+          ctx
+        )
+
+      # Now the strategy dispatches awaiting node (SuspendAction).
+      # Simulate the SuspendAction result with outcome: :suspend
+      Strategy.cmd(
+        agent,
+        [
+          %Jido.Instruction{
+            action: :workflow_node_result,
+            params: %{
+              status: :ok,
+              result: %{checkpoint: "paused"},
+              outcome: :suspend,
+              instruction: %Jido.Instruction{
+                action: Jido.Composer.TestActions.SuspendAction,
+                params: %{}
+              },
+              effects: [],
+              meta: %{}
+            }
+          }
+        ],
+        ctx
+      )
+    end
+
+    test "node returning :suspend creates Suspension and emits Suspend directive" do
+      {agent, ctx} = init_suspend_workflow()
+      {agent, directives} = advance_to_suspend(agent, ctx)
+
+      # Should emit a single SuspendDirective
+      assert [%SuspendDirective{suspension: %Suspension{} = suspension}] = directives
+
+      # Suspension should have reason :custom (no __suspension__ in result)
+      assert suspension.reason == :custom
+      assert is_binary(suspension.id)
+      assert suspension.metadata == %{node_state: :awaiting}
+
+      # Strategy status should be :waiting
+      assert StratState.status(agent) == :waiting
+
+      # Machine should still be at :awaiting (no transition happened)
+      strat = StratState.get(agent)
+      assert strat.machine.status == :awaiting
+      assert strat.pending_suspension == suspension
+
+      # Result data should be merged into context under current state
+      assert strat.machine.context.working[:awaiting] == %{checkpoint: "paused"}
+    end
+
+    test "suspend_resume with matching id transitions machine" do
+      {agent, ctx} = init_suspend_workflow()
+      {agent, _directives} = advance_to_suspend(agent, ctx)
+
+      strat = StratState.get(agent)
+      suspension_id = strat.pending_suspension.id
+
+      # Send suspend_resume with the correct suspension id
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_resume,
+              params: %{
+                suspension_id: suspension_id,
+                outcome: :ok,
+                data: %{resumed_by: "test"}
+              }
+            }
+          ],
+          ctx
+        )
+
+      # Should dispatch the next node (finalize / MultiplyAction)
+      assert [%Directive.RunInstruction{} = run] = directives
+      assert run.instruction.action == Jido.Composer.TestActions.MultiplyAction
+
+      # Status should be :running again
+      assert StratState.status(agent) == :running
+
+      # Machine should have transitioned to :finalize
+      strat = StratState.get(agent)
+      assert strat.machine.status == :finalize
+      assert strat.pending_suspension == nil
+
+      # Resume data should be merged into context
+      assert strat.machine.context.working[:resumed_by] == "test"
+    end
+
+    test "suspend_resume with mismatched id errors" do
+      {agent, ctx} = init_suspend_workflow()
+      {agent, _directives} = advance_to_suspend(agent, ctx)
+
+      strat = StratState.get(agent)
+      real_id = strat.pending_suspension.id
+
+      # Send suspend_resume with a wrong suspension id
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_resume,
+              params: %{
+                suspension_id: "wrong-id-12345",
+                outcome: :ok
+              }
+            }
+          ],
+          ctx
+        )
+
+      # Should return an error directive with mismatch message
+      assert [%Directive.Error{error: %RuntimeError{message: message}}] = directives
+      assert message =~ "Suspension ID mismatch"
+      assert message =~ inspect(real_id)
+      assert message =~ "wrong-id-12345"
+
+      # Status should remain :waiting
+      assert StratState.status(agent) == :waiting
+
+      # Pending suspension should still be there
+      strat = StratState.get(agent)
+      assert strat.pending_suspension != nil
+    end
+
+    test "suspend_timeout fires timeout outcome" do
+      {agent, ctx} = init_suspend_workflow()
+      {agent, _directives} = advance_to_suspend(agent, ctx)
+
+      strat = StratState.get(agent)
+      suspension_id = strat.pending_suspension.id
+
+      # Send suspend_timeout with the correct suspension id
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_timeout,
+              params: %{suspension_id: suspension_id}
+            }
+          ],
+          ctx
+        )
+
+      # The timeout_outcome defaults to :timeout, which should transition
+      # {:awaiting, :timeout} => :failed
+      assert directives == []
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :failed
+      assert StratState.status(agent) == :failure
+      assert strat.pending_suspension == nil
+    end
+
+    test "suspend_resume with no pending suspension errors" do
+      {agent, ctx} = init_suspend_workflow()
+
+      # Start but do NOT suspend - just start the workflow
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [%Jido.Instruction{action: :workflow_start, params: %{value: 1.0, amount: 2.0}}],
+          ctx
+        )
+
+      # Try to resume when there's no pending suspension
+      {_agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_resume,
+              params: %{suspension_id: "some-id", outcome: :ok}
+            }
+          ],
+          ctx
+        )
+
+      assert [%Directive.Error{error: %RuntimeError{message: "No pending suspension"}}] =
+               directives
+    end
+
+    test "suspend with explicit Suspension struct in result" do
+      {agent, ctx} = init_suspend_workflow()
+
+      # Start workflow and advance to awaiting
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [%Jido.Instruction{action: :workflow_start, params: %{value: 1.0, amount: 2.0}}],
+          ctx
+        )
+
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_node_result,
+              params: %{
+                status: :ok,
+                result: %{result: 3.0},
+                instruction: %Jido.Instruction{
+                  action: Jido.Composer.TestActions.AddAction,
+                  params: %{}
+                },
+                effects: [],
+                meta: %{}
+              }
+            }
+          ],
+          ctx
+        )
+
+      # Simulate a result that includes an explicit __suspension__ struct
+      {:ok, custom_suspension} =
+        Suspension.new(
+          reason: :rate_limit,
+          metadata: %{retry_after_ms: 5000},
+          timeout: 30_000,
+          timeout_outcome: :timeout
+        )
+
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_node_result,
+              params: %{
+                status: :ok,
+                result: %{processed: false, __suspension__: custom_suspension},
+                outcome: :suspend,
+                instruction: %Jido.Instruction{
+                  action: Jido.Composer.TestActions.SuspendAction,
+                  params: %{}
+                },
+                effects: [],
+                meta: %{}
+              }
+            }
+          ],
+          ctx
+        )
+
+      assert [%SuspendDirective{suspension: %Suspension{} = suspension}] = directives
+      # Should use the explicit suspension, not create a :custom one
+      assert suspension.reason == :rate_limit
+      assert suspension.metadata == %{retry_after_ms: 5000}
+      assert suspension.timeout == 30_000
+
+      strat = StratState.get(agent)
+      assert strat.pending_suspension.reason == :rate_limit
+    end
+
+    test "HumanNode backward compat through generalized suspension" do
+      # Build a workflow with a HumanNode at the :review state
+      {:ok, human_node} =
+        HumanNode.new(
+          name: "review_gate",
+          description: "Review gate",
+          prompt: "Please review",
+          allowed_responses: [:approved, :rejected],
+          timeout: 60_000,
+          timeout_outcome: :timeout
+        )
+
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{
+            prepare: {:action, Jido.Composer.TestActions.AddAction},
+            review: human_node,
+            finalize: {:action, Jido.Composer.TestActions.MultiplyAction}
+          },
+          transitions: %{
+            {:prepare, :ok} => :review,
+            {:review, :approved} => :finalize,
+            {:review, :rejected} => :failed,
+            {:review, :timeout} => :failed,
+            {:finalize, :ok} => :done,
+            {:_, :error} => :failed
+          },
+          initial: :prepare
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _directives} = Strategy.init(agent, ctx)
+
+      # Start and advance to review
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [%Jido.Instruction{action: :workflow_start, params: %{value: 1.0, amount: 2.0}}],
+          ctx
+        )
+
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_node_result,
+              params: %{
+                status: :ok,
+                result: %{result: 3.0},
+                instruction: %Jido.Instruction{
+                  action: Jido.Composer.TestActions.AddAction,
+                  params: %{}
+                },
+                effects: [],
+                meta: %{}
+              }
+            }
+          ],
+          ctx
+        )
+
+      # HumanNode dispatches via dispatch_human_node, which emits SuspendForHuman
+      # The dispatch_current_node matches %HumanNode{} and calls dispatch_human_node
+      # This should create a Suspension with reason: :human_input
+      strat = StratState.get(agent)
+      assert strat.status == :waiting
+      assert %Suspension{reason: :human_input} = strat.pending_suspension
+      assert strat.pending_suspension.approval_request != nil
+
+      suspension_id = strat.pending_suspension.id
+
+      # Resume using the generalized suspend_resume with the suspension id
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_resume,
+              params: %{
+                suspension_id: suspension_id,
+                response_data: %{
+                  request_id: strat.pending_suspension.approval_request.id,
+                  decision: :approved,
+                  respondent: "reviewer@test.com"
+                }
+              }
+            }
+          ],
+          ctx
+        )
+
+      # Should dispatch finalize node
+      assert [%Directive.RunInstruction{} = run] = directives
+      assert run.instruction.action == Jido.Composer.TestActions.MultiplyAction
+
+      # Status should be :running, machine at :finalize
+      assert StratState.status(agent) == :running
+      strat = StratState.get(agent)
+      assert strat.machine.status == :finalize
+      assert strat.pending_suspension == nil
+
+      # HITL response data should be in context
+      assert strat.machine.context.working[:hitl_response][:decision] == :approved
+    end
+  end
 end

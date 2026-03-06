@@ -3,13 +3,16 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
 
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
-  alias Jido.Composer.Directive.SuspendForHuman
+  alias Jido.Composer.Directive.Suspend
   alias Jido.Composer.HITL.{ApprovalRequest, ApprovalResponse}
   alias Jido.Composer.Node.HumanNode
 
+  alias Jido.Composer.Suspension
+
   alias Jido.Composer.TestActions.{
     NoopAction,
-    AccumulatorAction
+    AccumulatorAction,
+    RateLimitAction
   }
 
   # -- Workflow definitions --
@@ -17,7 +20,7 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
   defmodule ApprovalWorkflow do
     use Jido.Composer.Workflow,
       name: "approval_workflow",
-      description: "Process → Approve → Execute pipeline",
+      description: "Process -> Approve -> Execute pipeline",
       nodes: %{
         process: AccumulatorAction,
         approval: %HumanNode{
@@ -81,8 +84,7 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
         {agent, new_directives} = agent_module.cmd(agent, {result_action, payload})
         run_directive_loop(agent_module, agent, new_directives ++ rest)
 
-      %SuspendForHuman{} = suspend ->
-        # Return the agent and remaining directives including the suspend
+      %Suspend{} = suspend ->
         {agent, [suspend | rest]}
 
       _other ->
@@ -96,6 +98,16 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
         %{
           status: :ok,
           result: result,
+          instruction: %Jido.Instruction{action: action_module, params: params},
+          effects: [],
+          meta: %{}
+        }
+
+      {:ok, result, outcome} ->
+        %{
+          status: :ok,
+          result: result,
+          outcome: outcome,
           instruction: %Jido.Instruction{action: action_module, params: params},
           effects: [],
           meta: %{}
@@ -115,25 +127,22 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
   # -- Tests --
 
   describe "suspend/resume cycle" do
-    test "workflow suspends at HumanNode and emits SuspendForHuman directive" do
+    test "workflow suspends at HumanNode and emits Suspend directive" do
       agent = ApprovalWorkflow.new()
       {agent, directives} = ApprovalWorkflow.run(agent, %{tag: "deploy-v1"})
 
-      # Execute until we hit the HumanNode
       {agent, remaining} = execute_workflow(ApprovalWorkflow, agent, directives)
 
-      # Should have a SuspendForHuman directive
-      assert [%SuspendForHuman{} = suspend | _] = remaining
-      assert %ApprovalRequest{} = suspend.approval_request
-      assert suspend.approval_request.prompt == "Approve deployment to production?"
-      assert suspend.approval_request.allowed_responses == [:approved, :rejected]
-      assert suspend.approval_request.node_name == "deploy_approval"
-      assert suspend.approval_request.workflow_state == :approval
+      assert [%Suspend{} = suspend | _] = remaining
+      assert %{approval_request: %ApprovalRequest{} = request} = suspend.suspension
+      assert request.prompt == "Approve deployment to production?"
+      assert request.allowed_responses == [:approved, :rejected]
+      assert request.node_name == "deploy_approval"
+      assert request.workflow_state == :approval
 
-      # Strategy should be in :waiting status
       strat = StratState.get(agent)
       assert strat.status == :waiting
-      assert strat.pending_approval != nil
+      assert strat.pending_suspension != nil
       assert strat.machine.status == :approval
     end
 
@@ -142,12 +151,11 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       {agent, directives} = ApprovalWorkflow.run(agent, %{tag: "deploy-v1"})
       {agent, _remaining} = execute_workflow(ApprovalWorkflow, agent, directives)
 
-      # Resume with approval
       strat = StratState.get(agent)
 
       {:ok, response} =
         ApprovalResponse.new(
-          request_id: strat.pending_approval.id,
+          request_id: strat.pending_suspension.approval_request.id,
           decision: :approved,
           respondent: "admin@co.com",
           comment: "Ship it!"
@@ -156,14 +164,12 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       {agent, directives} =
         ApprovalWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
 
-      # Should continue with execute node
       {agent, _} = execute_workflow(ApprovalWorkflow, agent, directives)
 
       strat = StratState.get(agent)
       assert strat.machine.status == :done
       assert StratState.status(agent) == :success
 
-      # HITL response should be merged into context
       assert strat.machine.context.working[:hitl_response][:decision] == :approved
       assert strat.machine.context.working[:hitl_response][:respondent] == "admin@co.com"
     end
@@ -173,12 +179,11 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       {agent, directives} = ApprovalWorkflow.run(agent, %{tag: "deploy-v1"})
       {agent, _remaining} = execute_workflow(ApprovalWorkflow, agent, directives)
 
-      # Resume with rejection
       strat = StratState.get(agent)
 
       {:ok, response} =
         ApprovalResponse.new(
-          request_id: strat.pending_approval.id,
+          request_id: strat.pending_suspension.approval_request.id,
           decision: :rejected,
           respondent: "reviewer@co.com",
           comment: "Too risky"
@@ -197,7 +202,6 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       {agent, directives} = ApprovalWorkflow.run(agent, %{tag: "deploy-v1"})
       {agent, _remaining} = execute_workflow(ApprovalWorkflow, agent, directives)
 
-      # Resume with wrong request_id
       {:ok, response} =
         ApprovalResponse.new(
           request_id: "wrong-id",
@@ -207,10 +211,8 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       {agent, directives} =
         ApprovalWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
 
-      # Should emit an error directive
       assert [%Directive.Error{}] = directives
 
-      # Status should still be :waiting
       strat = StratState.get(agent)
       assert strat.status == :waiting
     end
@@ -224,7 +226,7 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
 
       {:ok, response} =
         ApprovalResponse.new(
-          request_id: strat.pending_approval.id,
+          request_id: strat.pending_suspension.approval_request.id,
           decision: :maybe
         )
 
@@ -241,10 +243,9 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       {agent, directives} = ApprovalWorkflow.run(agent, %{tag: "deploy-v1"})
       {_agent, remaining} = execute_workflow(ApprovalWorkflow, agent, directives)
 
-      [%SuspendForHuman{approval_request: request} | _] = remaining
+      [%Suspend{suspension: suspension} | _] = remaining
 
-      # The visible_context should contain accumulated workflow context
-      assert request.visible_context[:tag] == "deploy-v1"
+      assert suspension.approval_request.visible_context[:tag] == "deploy-v1"
     end
   end
 
@@ -271,15 +272,15 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       {agent, directives} = TimeoutWorkflow.run(agent, %{})
       {agent, _remaining} = execute_workflow(TimeoutWorkflow, agent, directives)
 
-      # Verify suspended
       strat = StratState.get(agent)
       assert strat.status == :waiting
 
-      # Simulate timeout
       {agent, directives} =
-        TimeoutWorkflow.cmd(agent, {:hitl_timeout, %{request_id: strat.pending_approval.id}})
+        TimeoutWorkflow.cmd(
+          agent,
+          {:hitl_timeout, %{request_id: strat.pending_suspension.approval_request.id}}
+        )
 
-      # Should continue to fallback node
       {agent, _} = execute_workflow(TimeoutWorkflow, agent, directives)
 
       strat = StratState.get(agent)
@@ -293,9 +294,8 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       {agent, _remaining} = execute_workflow(TimeoutWorkflow, agent, directives)
 
       strat = StratState.get(agent)
-      request_id = strat.pending_approval.id
+      request_id = strat.pending_suspension.approval_request.id
 
-      # Approve first
       {:ok, response} =
         ApprovalResponse.new(request_id: request_id, decision: :approved)
 
@@ -304,13 +304,104 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
 
       {agent, _} = execute_workflow(TimeoutWorkflow, agent, directives)
 
-      # Now try timeout — should be ignored (no pending request)
       {agent, directives} =
         TimeoutWorkflow.cmd(agent, {:hitl_timeout, %{request_id: request_id}})
 
       assert directives == []
       strat = StratState.get(agent)
       assert strat.machine.status == :done
+    end
+  end
+
+  # -- Generalized suspension workflows --
+
+  defmodule RateLimitWorkflow do
+    use Jido.Composer.Workflow,
+      name: "rate_limit_workflow",
+      description: "Workflow with rate-limited step that suspends",
+      nodes: %{
+        prepare: AccumulatorAction,
+        api_call: RateLimitAction,
+        finish: NoopAction
+      },
+      transitions: %{
+        {:prepare, :ok} => :api_call,
+        {:api_call, :ok} => :finish,
+        {:api_call, :timeout} => :failed,
+        {:finish, :ok} => :done,
+        {:_, :error} => :failed
+      },
+      initial: :prepare
+  end
+
+  describe "generalized suspension with rate_limit reason" do
+    test "rate-limited node suspends workflow with Suspension struct" do
+      agent = RateLimitWorkflow.new()
+      {agent, directives} = RateLimitWorkflow.run(agent, %{tag: "api-v1", tokens: 0})
+      {agent, remaining} = execute_workflow(RateLimitWorkflow, agent, directives)
+
+      assert [%Suspend{} = suspend | _] = remaining
+      assert %Suspension{reason: :rate_limit} = suspend.suspension
+      assert suspend.suspension.metadata == %{retry_after_ms: 5000}
+
+      strat = StratState.get(agent)
+      assert strat.status == :waiting
+      assert strat.pending_suspension.reason == :rate_limit
+    end
+
+    test "resume after rate-limit suspension continues workflow" do
+      agent = RateLimitWorkflow.new()
+      {agent, directives} = RateLimitWorkflow.run(agent, %{tag: "api-v1", tokens: 0})
+      {agent, _remaining} = execute_workflow(RateLimitWorkflow, agent, directives)
+
+      strat = StratState.get(agent)
+      suspension_id = strat.pending_suspension.id
+
+      # Resume with outcome :ok
+      {agent, directives} =
+        RateLimitWorkflow.cmd(
+          agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, outcome: :ok, data: %{processed: true}}}
+        )
+
+      {agent, _} = execute_workflow(RateLimitWorkflow, agent, directives)
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+      assert StratState.status(agent) == :success
+    end
+
+    test "suspension timeout fires timeout_outcome transition" do
+      agent = RateLimitWorkflow.new()
+      {agent, directives} = RateLimitWorkflow.run(agent, %{tag: "api-v1", tokens: 0})
+      {agent, _remaining} = execute_workflow(RateLimitWorkflow, agent, directives)
+
+      strat = StratState.get(agent)
+      suspension_id = strat.pending_suspension.id
+
+      {agent, _directives} =
+        RateLimitWorkflow.cmd(agent, {:suspend_timeout, %{suspension_id: suspension_id}})
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :failed
+      assert StratState.status(agent) == :failure
+    end
+
+    test "resume with mismatched suspension_id errors" do
+      agent = RateLimitWorkflow.new()
+      {agent, directives} = RateLimitWorkflow.run(agent, %{tag: "api-v1", tokens: 0})
+      {agent, _remaining} = execute_workflow(RateLimitWorkflow, agent, directives)
+
+      {agent, directives} =
+        RateLimitWorkflow.cmd(
+          agent,
+          {:suspend_resume, %{suspension_id: "wrong-id", outcome: :ok}}
+        )
+
+      assert [%Directive.Error{}] = directives
+      strat = StratState.get(agent)
+      assert strat.status == :waiting
     end
   end
 end

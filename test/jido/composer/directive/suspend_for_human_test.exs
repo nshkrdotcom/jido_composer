@@ -1,6 +1,7 @@
 defmodule Jido.Composer.Directive.SuspendForHumanTest do
   use ExUnit.Case, async: true
 
+  alias Jido.Composer.Directive.Suspend
   alias Jido.Composer.Directive.SuspendForHuman
   alias Jido.Composer.HITL.ApprovalRequest
 
@@ -16,11 +17,14 @@ defmodule Jido.Composer.Directive.SuspendForHumanTest do
       {:ok, request: request}
     end
 
-    test "creates a directive with an ApprovalRequest", %{request: request} do
+    test "creates a Suspend directive with a Suspension wrapping the ApprovalRequest", %{
+      request: request
+    } do
       assert {:ok, directive} = SuspendForHuman.new(approval_request: request)
 
-      assert %SuspendForHuman{} = directive
-      assert directive.approval_request == request
+      assert %Suspend{} = directive
+      assert directive.suspension.reason == :human_input
+      assert directive.suspension.approval_request == request
     end
 
     test "defaults notification to nil", %{request: request} do
@@ -90,7 +94,7 @@ defmodule Jido.Composer.Directive.SuspendForHumanTest do
       binary = :erlang.term_to_binary(directive)
       restored = :erlang.binary_to_term(binary)
 
-      assert restored.approval_request.prompt == "Approve?"
+      assert restored.suspension.approval_request.prompt == "Approve?"
       assert restored.notification == {:webhook, url: "https://example.com"}
       assert restored.hibernate == true
     end

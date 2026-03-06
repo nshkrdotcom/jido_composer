@@ -114,7 +114,7 @@ defmodule Jido.Composer.Workflow.DSL do
 
       {:suspend, agent, _directive} ->
         strat = Jido.Agent.Strategy.State.get(agent)
-        {:error, {:suspended, strat.pending_approval}}
+        {:error, {:suspended, strat.pending_suspension}}
     end
   end
 
@@ -153,7 +153,7 @@ defmodule Jido.Composer.Workflow.DSL do
 
         run_directives(module, agent, final_directives ++ remaining)
 
-      %Jido.Composer.Directive.SuspendForHuman{} = suspend ->
+      %Jido.Composer.Directive.Suspend{} = suspend ->
         {:suspend, agent, suspend}
 
       _other ->

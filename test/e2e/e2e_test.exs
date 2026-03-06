@@ -13,6 +13,7 @@ defmodule Jido.Composer.E2E.E2ETest do
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.Composer.CassetteHelper
   alias Jido.Composer.HITL.ApprovalRequest
+  alias Jido.Composer.Suspension
   alias Jido.Composer.Node.{ActionNode, FanOutNode, HumanNode}
   alias Jido.Composer.Orchestrator.Strategy
 
@@ -142,6 +143,24 @@ defmodule Jido.Composer.E2E.E2ETest do
         {:_, :error} => :failed
       },
       initial: :step
+  end
+
+  defmodule RateLimitWorkflow do
+    use Jido.Composer.Workflow,
+      name: "rate_limit_workflow",
+      nodes: %{
+        prepare: AccumulatorAction,
+        api_call: Jido.Composer.TestActions.RateLimitAction,
+        finish: NoopAction
+      },
+      transitions: %{
+        {:prepare, :ok} => :api_call,
+        {:api_call, :ok} => :finish,
+        {:api_call, :timeout} => :failed,
+        {:finish, :ok} => :done,
+        {:_, :error} => :failed
+      },
+      initial: :prepare
   end
 
   # ── Orchestrator agent (bare, for cassette-driven tests) ──
@@ -315,11 +334,23 @@ defmodule Jido.Composer.E2E.E2ETest do
     test "returns suspended with ApprovalRequest" do
       agent = HITLWorkflow.new()
 
-      assert {:error, {:suspended, %ApprovalRequest{} = request}} =
+      assert {:error, {:suspended, %Suspension{reason: :human_input} = suspension}} =
                HITLWorkflow.run_sync(agent, %{tag: "v1.0"})
 
-      assert request.prompt == "Approve deployment?"
-      assert request.allowed_responses == [:approved, :rejected]
+      assert %ApprovalRequest{} = suspension.approval_request
+      assert suspension.approval_request.prompt == "Approve deployment?"
+      assert suspension.approval_request.allowed_responses == [:approved, :rejected]
+    end
+  end
+
+  describe "workflow: rate-limit suspension via run_sync" do
+    test "returns suspended with rate_limit Suspension" do
+      agent = RateLimitWorkflow.new()
+
+      assert {:error, {:suspended, %Suspension{reason: :rate_limit} = suspension}} =
+               RateLimitWorkflow.run_sync(agent, %{tag: "api-v1", tokens: 0})
+
+      assert suspension.metadata == %{retry_after_ms: 5000}
     end
   end
 
