@@ -182,3 +182,67 @@ The directive loop indirection adds negligible overhead compared to LLM API late
 | Signal routing fallback      | No fallback — explicit `signal_routes/1` required for all handled signal types    |
 | SpawnAgent full lifecycle    | Confirmed: spawn → monitor → child_started → signal → emit_to_parent → child_exit |
 | FanOutNode feasibility       | Confirmed: `Task.async_stream` delivers ~10x speedup with proper error handling   |
+
+### Round 3 — Native Agent Composition Prototypes
+
+| Script                            | Tests | Result                                                                                                                           |
+| --------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `test_agent_node_run.exs`         | 7     | **ALL PASS** — run_sync delegation, SpawnAgent DSL handler, FanOut with agent branches, result shape analysis                    |
+| `test_node_io_envelope.exs`       | 7     | **ALL PASS** — Typed envelope, resolve_result, heterogeneous FanOut merge, tool result unwrapping, monoid preservation           |
+| `test_context_layering.exs`       | 8     | **ALL PASS** — Ambient/working separation, fork functions, backward compat, scoping safety, Machine integration, 3-level nesting |
+| `test_integrated_composition.exs` | 7     | **ALL PASS** — Full pipeline with nested agent, mixed FanOut, generalized suspension, suspend/resume, FanOut partial completion  |
+
+---
+
+## Round 3 — Native Agent Composition Findings
+
+All six proposals from `native-agent-composition.md` were prototyped.
+Everything worked as designed. **No design updates required.**
+
+### Design Updates Required
+
+None. The design doc is accurate as written.
+
+### Implementation Notes
+
+Details that don't change the design but are useful when coding.
+
+1. **`run_sync/2` returns full machine context, not just last step.**
+   `AgentNode.run/3` delegating to `run_sync/2` gets back the entire context
+   (e.g. `%{value: 5, step1: %{value: 6}, step2: %{value: 10}}`), not a
+   single step's output. The parent scopes this naturally under its state name.
+   The design doc's code is correct — just be aware of the shape.
+
+2. **Workflow exports `run_sync/2`, Orchestrator exports `query_sync/3`.**
+   Neither exports both. The `cond` chain in the design doc's `AgentNode.run/3`
+   handles this correctly — confirming the branching is necessary.
+
+3. **DSL `run_directives/3` silently drops SpawnAgent directives today.**
+   Falls through to the `_other ->` clause. The SpawnAgent handler proposed in
+   the design doc is necessary and works as described — same pattern as
+   RunInstruction but calls `run_sync` instead of `Jido.Exec.run`.
+
+4. **`@derive Jason.Encoder` needed on NodeIO struct.** `term_to_binary` works
+   natively, but Jason encoding requires the explicit derive. Cannot be added
+   at runtime.
+
+5. **Context `to_flat_map` puts ambient under `__ambient__` key.** Follows
+   existing reserved-key conventions (`__strategy__`, `__parent__`,
+   `__approval_request__`). No collision risk due to scoping.
+
+6. **Actions read top-level keys, not scoped keys.** `DoubleAction` with
+   context `%{value: 5, step1: %{value: 6}}` reads `:value` (initial `5`),
+   not `step1.value`. Pre-existing behavior, not introduced by these changes.
+   Worth documenting for users.
+
+### Performance (Round 3)
+
+| Metric                     | Value        | Notes                      |
+| -------------------------- | ------------ | -------------------------- |
+| Context.apply_result/sec   | ~1,000,000   | Negligible overhead        |
+| Context.fork_for_child/sec | ~1,500,000   | Even with 3 fork functions |
+| Context.to_flat_map/sec    | ~6,600,000   | Trivial map merge          |
+| Context serialize+restore  | ~180,000/sec | Including term_to_binary   |
+| Context serialized size    | ~1.1 KB      | 20-step context + ambient  |
+
+All context operations are sub-microsecond. Zero performance concern.
