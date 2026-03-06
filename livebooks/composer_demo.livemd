@@ -503,7 +503,7 @@ defmodule Demo.DirectiveRunner do
           case Jido.Exec.run(instr.action, instr.params, %{}, timeout: 0) do
             {:ok, result} -> %{status: :ok, result: result}
             {:ok, result, outcome} -> %{status: :ok, result: result, outcome: outcome}
-            {:error, reason} -> %{status: :error, reason: reason}
+            {:error, reason} -> %{status: :error, result: %{error: reason}}
           end
 
         {agent, new_directives} = agent_module.cmd(agent, {result_action, payload})

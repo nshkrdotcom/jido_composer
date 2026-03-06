@@ -241,7 +241,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       result_params = %{
         status: :error,
-        reason: "something broke",
+        result: %{error: "something broke"},
         instruction: %Jido.Instruction{action: Jido.Composer.TestActions.AddAction, params: %{}},
         effects: [],
         meta: %{}

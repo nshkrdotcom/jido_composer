@@ -137,7 +137,7 @@ defmodule Jido.Composer.Integration.WorkflowAgentNodeTest do
       {:error, reason} ->
         %{
           status: :error,
-          reason: reason,
+          result: %{error: reason},
           instruction: %Jido.Instruction{action: action_module, params: params},
           effects: [],
           meta: %{}

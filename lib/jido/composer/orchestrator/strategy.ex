@@ -156,6 +156,16 @@ defmodule Jido.Composer.Orchestrator.Strategy do
           end)
 
         check_all_tools_done(agent)
+
+      other ->
+        {agent,
+         [
+           %Directive.Error{
+             error: %RuntimeError{
+               message: "Unexpected tool result status: #{inspect(other)}"
+             }
+           }
+         ]}
     end
   end
 
@@ -367,6 +377,15 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     end
   end
 
+  def cmd(agent, [%Jido.Instruction{action: :fan_out_branch_result} | _], _ctx) do
+    {agent,
+     [
+       %Directive.Error{
+         error: %RuntimeError{message: "Orchestrator does not support FanOut branches"}
+       }
+     ]}
+  end
+
   def cmd(agent, _instructions, _ctx) do
     {agent, []}
   end
@@ -380,7 +399,6 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       {"composer.orchestrator.child.result", {:strategy_cmd, :orchestrator_child_result}},
       {"jido.agent.child.started", {:strategy_cmd, :orchestrator_child_started}},
       {"jido.agent.child.exit", {:strategy_cmd, :orchestrator_child_exit}},
-      {"composer.fan_out.branch_result", {:strategy_cmd, :fan_out_branch_result}},
       {"composer.suspend.resume", {:strategy_cmd, :suspend_resume}},
       {"composer.suspend.timeout", {:strategy_cmd, :suspend_timeout}},
       {"composer.hitl.response", {:strategy_cmd, :hitl_response}},
@@ -804,6 +822,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
           state.pending_tool_calls == [] and state.suspended_calls == %{} ->
             :awaiting_approval
+
+          state.suspended_calls != %{} and state.pending_tool_calls != [] ->
+            :awaiting_tools_and_suspension
 
           true ->
             :awaiting_tools_and_approval

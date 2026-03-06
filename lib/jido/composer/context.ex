@@ -63,4 +63,12 @@ defmodule Jido.Composer.Context do
       fork_fns: Map.get(data, :fork_fns, %{})
     }
   end
+
+  def from_serializable(%{"ambient" => ambient, "working" => working} = data) do
+    %__MODULE__{
+      ambient: ambient,
+      working: working,
+      fork_fns: Map.get(data, "fork_fns", %{})
+    }
+  end
 end

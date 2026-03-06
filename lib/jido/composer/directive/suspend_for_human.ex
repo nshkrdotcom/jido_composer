@@ -12,15 +12,6 @@ defmodule Jido.Composer.Directive.SuspendForHuman do
   alias Jido.Composer.HITL.ApprovalRequest
   alias Jido.Composer.Suspension
 
-  @enforce_keys [:approval_request]
-  defstruct [:approval_request, :notification, hibernate: false]
-
-  @type t :: %__MODULE__{
-          approval_request: ApprovalRequest.t(),
-          notification: term() | nil,
-          hibernate: boolean() | map()
-        }
-
   @doc """
   Creates a `%Suspend{}` directive wrapping a `Suspension` with
   `reason: :human_input` and the given `ApprovalRequest`.

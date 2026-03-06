@@ -137,7 +137,7 @@ defmodule Jido.Composer.Integration.WorkflowFanOutTest do
   defp execute_fan_out_branch(%FanOutBranch{instruction: %Jido.Instruction{} = instr}) do
     case execute_instruction(instr) do
       %{status: :ok, result: result} -> {:ok, result}
-      %{status: :error, reason: reason} -> {:error, reason}
+      %{status: :error, result: %{error: reason}} -> {:error, reason}
     end
   end
 
@@ -273,7 +273,7 @@ defmodule Jido.Composer.Integration.WorkflowFanOutTest do
       {:error, reason} ->
         %{
           status: :error,
-          reason: reason,
+          result: %{error: reason},
           instruction: %Jido.Instruction{action: action_module, params: params},
           effects: [],
           meta: %{}

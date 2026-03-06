@@ -160,6 +160,7 @@ defmodule Jido.Composer.Orchestrator.DSL do
   defp execute_orch_instruction(%Jido.Instruction{action: action_module, params: params}) do
     case Jido.Exec.run(action_module, params, %{}, timeout: 0) do
       {:ok, result} -> %{status: :ok, result: result}
+      {:ok, result, outcome} -> %{status: :ok, result: result, outcome: outcome}
       {:error, reason} -> %{status: :error, result: %{error: reason}}
     end
   end

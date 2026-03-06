@@ -54,8 +54,12 @@ defmodule Jido.Composer.Checkpoint do
   @doc """
   Migrates checkpoint state from an older schema version to the current one.
   """
-  @spec migrate(map(), pos_integer()) :: map()
+  @spec migrate(map(), non_neg_integer()) :: map()
   def migrate(state, version)
+
+  def migrate(state, v) when v < 1 do
+    migrate(state, 1)
+  end
 
   def migrate(state, 1) do
     state
@@ -64,4 +68,6 @@ defmodule Jido.Composer.Checkpoint do
   end
 
   def migrate(state, 2), do: state
+
+  def migrate(state, _version), do: state
 end

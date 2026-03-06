@@ -78,7 +78,7 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
       {:error, reason} ->
         %{
           status: :error,
-          reason: reason,
+          result: %{error: reason},
           instruction: %Jido.Instruction{action: action_module, params: params},
           effects: [],
           meta: %{}

@@ -96,8 +96,8 @@ defmodule Jido.Composer.Directive.SuspendForHumanTest do
       assert suspension.reason == :human_input
       assert suspension.approval_request == request
 
-      # SuspendForHuman struct match must NOT work
-      refute match?(%SuspendForHuman{}, directive)
+      # SuspendForHuman is no longer a struct module
+      refute function_exported?(SuspendForHuman, :__struct__, 0)
     end
 
     test "approval_request is accessed via suspension.approval_request", %{request: request} do

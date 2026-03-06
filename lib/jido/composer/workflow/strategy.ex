@@ -49,7 +49,9 @@ defmodule Jido.Composer.Workflow.Strategy do
         pending_fan_out: nil,
         ambient_keys: opts[:ambient] || [],
         fork_fns: opts[:fork_fns] || %{},
-        children: %{}
+        children: %{},
+        agent_id: agent.id,
+        agent_module: ctx[:agent_module]
       })
 
     {agent, []}

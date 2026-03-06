@@ -1424,7 +1424,13 @@ defmodule Jido.Composer.E2E.E2ETest do
               %{status: :ok, result: result, instruction: instr, effects: [], meta: %{}}
 
             {:error, reason} ->
-              %{status: :error, reason: reason, instruction: instr, effects: [], meta: %{}}
+              %{
+                status: :error,
+                result: %{error: reason},
+                instruction: instr,
+                effects: [],
+                meta: %{}
+              }
           end
 
         {agent, new_directives} = mod.cmd(agent, {result_action, payload})

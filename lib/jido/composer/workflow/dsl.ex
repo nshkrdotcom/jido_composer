@@ -191,11 +191,12 @@ defmodule Jido.Composer.Workflow.DSL do
        }) do
     case execute_sync(instr) do
       %{status: :ok, result: result} -> {:ok, result}
-      %{status: :error, reason: reason} -> {:error, reason}
+      %{status: :error, result: %{error: reason}} -> {:error, reason}
     end
   end
 
-  defp execute_fan_out_branch(%Jido.Composer.Directive.FanOutBranch{spawn_agent: spawn_info}) do
+  defp execute_fan_out_branch(%Jido.Composer.Directive.FanOutBranch{spawn_agent: spawn_info})
+       when not is_nil(spawn_info) do
     Jido.Composer.Node.execute_child_sync(spawn_info.agent, spawn_info.opts)
   end
 
@@ -208,7 +209,7 @@ defmodule Jido.Composer.Workflow.DSL do
         %{status: :ok, result: result, outcome: outcome}
 
       {:error, reason} ->
-        %{status: :error, reason: reason}
+        %{status: :error, result: %{error: reason}}
     end
   end
 

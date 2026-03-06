@@ -132,7 +132,7 @@ defmodule Jido.Composer.Integration.CompositionTest do
       {:error, reason} ->
         %{
           status: :error,
-          reason: reason,
+          result: %{error: reason},
           instruction: %Jido.Instruction{action: action_module, params: params},
           effects: [],
           meta: %{}
