@@ -40,7 +40,7 @@ defmodule Jido.Composer.Node.AgentNode do
       mode not in @valid_modes ->
         {:error, "invalid mode #{inspect(mode)}, must be one of #{inspect(@valid_modes)}"}
 
-      not agent_module?(agent_module) ->
+      not Jido.Composer.Node.agent_module?(agent_module) ->
         {:error, "#{inspect(agent_module)} is not a valid Jido.Agent module"}
 
       true ->
@@ -100,8 +100,4 @@ defmodule Jido.Composer.Node.AgentNode do
 
   @spec timeout(t()) :: pos_integer()
   def timeout(%__MODULE__{opts: opts}), do: Keyword.get(opts, :timeout, @default_timeout)
-
-  defp agent_module?(module) do
-    Code.ensure_loaded?(module) && function_exported?(module, :__agent_metadata__, 0)
-  end
 end

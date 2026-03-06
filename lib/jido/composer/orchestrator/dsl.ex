@@ -142,7 +142,7 @@ defmodule Jido.Composer.Orchestrator.DSL do
         run_orch_directives(module, agent, new_directives ++ rest)
 
       %Jido.Agent.Directive.SpawnAgent{agent: child_module, tag: tag, opts: spawn_opts} ->
-        payload = execute_child_sync(child_module, spawn_opts)
+        payload = Jido.Composer.Node.execute_child_sync(child_module, spawn_opts)
 
         {agent, new_directives} =
           module.cmd(agent, {:orchestrator_child_result, %{tag: tag, result: payload}})
@@ -156,23 +156,6 @@ defmodule Jido.Composer.Orchestrator.DSL do
 
   defp unwrap_result(%Jido.Composer.NodeIO{} = io), do: Jido.Composer.NodeIO.unwrap(io)
   defp unwrap_result(result), do: result
-
-  defp execute_child_sync(child_module, spawn_opts) do
-    context = Map.get(spawn_opts, :context, %{})
-    child_agent = child_module.new()
-
-    cond do
-      function_exported?(child_module, :run_sync, 2) ->
-        child_module.run_sync(child_agent, context)
-
-      function_exported?(child_module, :query_sync, 3) ->
-        query = Map.get(context, :query, "")
-        child_module.query_sync(child_agent, query, context)
-
-      true ->
-        {:error, :agent_not_sync_runnable}
-    end
-  end
 
   defp execute_orch_instruction(%Jido.Instruction{action: action_module, params: params}) do
     case Jido.Exec.run(action_module, params, %{}, timeout: 0) do

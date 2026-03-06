@@ -226,25 +226,33 @@ defmodule Jido.Composer.Orchestrator.Strategy do
          ]}
 
       %{request: request, call: call} ->
-        {:ok, response} =
-          ApprovalResponse.new(
-            request_id: response_data.request_id,
-            decision: response_data.decision,
-            data: Map.get(response_data, :data),
-            respondent: Map.get(response_data, :respondent),
-            comment: Map.get(response_data, :comment),
-            responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
-          )
+        case ApprovalResponse.new(
+               request_id: response_data.request_id,
+               decision: response_data.decision,
+               data: Map.get(response_data, :data),
+               respondent: Map.get(response_data, :respondent),
+               comment: Map.get(response_data, :comment),
+               responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
+             ) do
+          {:ok, response} ->
+            case ApprovalResponse.validate(response, request) do
+              :ok ->
+                handle_approval_decision(agent, request_id, response, call)
 
-        case ApprovalResponse.validate(response, request) do
-          :ok ->
-            handle_approval_decision(agent, request_id, response, call)
+              {:error, reason} ->
+                {agent,
+                 [
+                   %Directive.Error{
+                     error: %RuntimeError{message: "HITL validation failed: #{reason}"}
+                   }
+                 ]}
+            end
 
           {:error, reason} ->
             {agent,
              [
                %Directive.Error{
-                 error: %RuntimeError{message: "HITL validation failed: #{reason}"}
+                 error: %RuntimeError{message: "HITL response invalid: #{reason}"}
                }
              ]}
         end
@@ -476,51 +484,67 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       ungated_ids = Enum.map(ungated, & &1.id)
 
       # Build gated_calls map: request_id -> %{request, call}
-      gated_entries =
-        Map.new(gated, fn call ->
-          {:ok, request} =
-            ApprovalRequest.new(
-              prompt: "Approve tool call: #{call.name}(#{inspect(call.arguments)})",
-              allowed_responses: [:approved, :rejected],
-              visible_context: call.arguments,
-              metadata: %{tool_call_id: call.id, tool_name: call.name}
-            )
+      gated_results =
+        Enum.reduce_while(gated, {:ok, %{}}, fn call, {:ok, acc} ->
+          case ApprovalRequest.new(
+                 prompt: "Approve tool call: #{call.name}(#{inspect(call.arguments)})",
+                 allowed_responses: [:approved, :rejected],
+                 visible_context: call.arguments,
+                 metadata: %{tool_call_id: call.id, tool_name: call.name}
+               ) do
+            {:ok, request} ->
+              {:cont, {:ok, Map.put(acc, request.id, %{request: request, call: call})}}
 
-          {request.id, %{request: request, call: call}}
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
         end)
 
-      agent =
-        StratState.update(agent, fn s ->
-          new_status =
-            cond do
-              gated == [] -> :awaiting_tools
-              ungated == [] -> :awaiting_approval
-              true -> :awaiting_tools_and_approval
-            end
+      case gated_results do
+        {:error, reason} ->
+          agent =
+            StratState.update(agent, fn s ->
+              %{s | status: :error, result: "Failed to create approval request: #{reason}"}
+            end)
 
-          %{
-            s
-            | status: new_status,
-              pending_tool_calls: ungated_ids,
-              completed_tool_results: [],
-              gated_calls: gated_entries
-          }
-        end)
+          {agent, []}
 
-      # Build directives for ungated calls
-      ungated_directives =
-        Enum.map(ungated, fn call ->
-          build_tool_directive(call, state.nodes)
-        end)
+        {:ok, gated_entries} ->
+          agent =
+            StratState.update(agent, fn s ->
+              new_status =
+                cond do
+                  gated == [] -> :awaiting_tools
+                  ungated == [] -> :awaiting_approval
+                  true -> :awaiting_tools_and_approval
+                end
 
-      # Build SuspendForHuman directives for gated calls
-      gated_directives =
-        Enum.map(gated_entries, fn {_req_id, %{request: request}} ->
-          {:ok, directive} = SuspendForHuman.new(approval_request: request)
-          directive
-        end)
+              %{
+                s
+                | status: new_status,
+                  pending_tool_calls: ungated_ids,
+                  completed_tool_results: [],
+                  gated_calls: gated_entries
+              }
+            end)
 
-      {agent, ungated_directives ++ gated_directives}
+          # Build directives for ungated calls
+          ungated_directives =
+            Enum.map(ungated, fn call ->
+              build_tool_directive(call, state.nodes)
+            end)
+
+          # Build SuspendForHuman directives for gated calls
+          gated_directives =
+            Enum.reduce(gated_entries, [], fn {_req_id, %{request: request}}, acc ->
+              case SuspendForHuman.new(approval_request: request) do
+                {:ok, directive} -> acc ++ [directive]
+                {:error, _reason} -> acc
+              end
+            end)
+
+          {agent, ungated_directives ++ gated_directives}
+      end
     end
   end
 
@@ -648,7 +672,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
              "REJECTED by human reviewer. Reason: #{reason}. Choose a different approach."}
           )
 
-        scope_key = String.to_existing_atom(call.name)
+        scope_key = scope_atom(agent, call.name)
         rejection_data = %{error: "REJECTED: #{reason}"}
 
         agent =
@@ -678,7 +702,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
              "REJECTED by human reviewer. Reason: #{reason}. Choose a different approach."}
           )
 
-        scope_key = String.to_existing_atom(call.name)
+        scope_key = scope_atom(agent, call.name)
         rejection_data = %{error: "REJECTED: #{reason}"}
 
         agent =
@@ -703,36 +727,57 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     reason = params[:reason] || :custom
     suspension_meta = params[:suspension_metadata] || %{}
 
-    {:ok, suspension} =
-      Suspension.new(
-        reason: reason,
-        timeout: Map.get(suspension_meta, :timeout, :infinity),
-        resume_signal: "composer.suspend.resume",
-        metadata: Map.merge(suspension_meta, %{tool_call_id: call_id, tool_name: tool_name})
-      )
+    case Suspension.new(
+           reason: reason,
+           timeout: Map.get(suspension_meta, :timeout, :infinity),
+           resume_signal: "composer.suspend.resume",
+           metadata: Map.merge(suspension_meta, %{tool_call_id: call_id, tool_name: tool_name})
+         ) do
+      {:ok, suspension} ->
+        call = %{id: call_id, name: tool_name, arguments: params[:arguments] || %{}}
 
-    call = %{id: call_id, name: tool_name, arguments: params[:arguments] || %{}}
+        agent =
+          StratState.update(agent, fn s ->
+            new_pending = List.delete(s.pending_tool_calls, call_id)
 
-    agent =
-      StratState.update(agent, fn s ->
-        new_pending = List.delete(s.pending_tool_calls, call_id)
+            new_suspended =
+              Map.put(s.suspended_calls, suspension.id, %{suspension: suspension, call: call})
 
-        new_suspended =
-          Map.put(s.suspended_calls, suspension.id, %{suspension: suspension, call: call})
+            %{s | pending_tool_calls: new_pending, suspended_calls: new_suspended}
+          end)
 
-        %{s | pending_tool_calls: new_pending, suspended_calls: new_suspended}
-      end)
+        directive = %SuspendDirective{suspension: suspension}
 
-    directive = %SuspendDirective{suspension: suspension}
+        # Check if other tools are still pending
+        state = StratState.get(agent)
 
-    # Check if other tools are still pending
-    state = StratState.get(agent)
+        if state.pending_tool_calls == [] and state.gated_calls == %{} do
+          agent = StratState.update(agent, fn s -> %{s | status: :awaiting_suspension} end)
+          {agent, [directive]}
+        else
+          {agent, [directive]}
+        end
 
-    if state.pending_tool_calls == [] and state.gated_calls == %{} do
-      agent = StratState.update(agent, fn s -> %{s | status: :awaiting_suspension} end)
-      {agent, [directive]}
-    else
-      {agent, [directive]}
+      {:error, reason} ->
+        # Treat as error result for the tool call
+        tool_result = AgentTool.to_tool_result(call_id, tool_name, {:error, reason})
+        scope_key = scope_atom(agent, tool_name)
+
+        agent =
+          StratState.update(agent, fn s ->
+            new_pending = List.delete(s.pending_tool_calls, call_id)
+            new_completed = s.completed_tool_results ++ [tool_result]
+            new_context = deep_merge(s.context, %{scope_key => %{error: reason}})
+
+            %{
+              s
+              | pending_tool_calls: new_pending,
+                completed_tool_results: new_completed,
+                context: new_context
+            }
+          end)
+
+        check_all_tools_done(agent)
     end
   end
 
@@ -815,7 +860,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
   defp build_nodes(modules) when is_list(modules) do
     Map.new(modules, fn
       {mod, opts} when is_atom(mod) and is_list(opts) ->
-        if agent_module?(mod) do
+        if Jido.Composer.Node.agent_module?(mod) do
           {:ok, node} = AgentNode.new(mod, opts)
           {AgentNode.name(node), node}
         else
@@ -824,7 +869,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         end
 
       mod when is_atom(mod) ->
-        if agent_module?(mod) do
+        if Jido.Composer.Node.agent_module?(mod) do
           {:ok, node} = AgentNode.new(mod)
           {AgentNode.name(node), node}
         else
@@ -838,10 +883,6 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       %AgentNode{} = node ->
         {AgentNode.name(node), node}
     end)
-  end
-
-  defp agent_module?(module) do
-    Code.ensure_loaded?(module) && function_exported?(module, :__agent_metadata__, 0)
   end
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do

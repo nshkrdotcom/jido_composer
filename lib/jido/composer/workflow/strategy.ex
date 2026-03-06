@@ -239,25 +239,33 @@ defmodule Jido.Composer.Workflow.Strategy do
       %Suspension{reason: :human_input} = suspension ->
         response_data = instr.params
 
-        {:ok, response} =
-          ApprovalResponse.new(
-            request_id: response_data.request_id,
-            decision: response_data.decision,
-            data: Map.get(response_data, :data),
-            respondent: Map.get(response_data, :respondent),
-            comment: Map.get(response_data, :comment),
-            responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
-          )
+        case ApprovalResponse.new(
+               request_id: response_data.request_id,
+               decision: response_data.decision,
+               data: Map.get(response_data, :data),
+               respondent: Map.get(response_data, :respondent),
+               comment: Map.get(response_data, :comment),
+               responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
+             ) do
+          {:ok, response} ->
+            case ApprovalResponse.validate(response, suspension.approval_request) do
+              :ok ->
+                handle_hitl_decision(agent, response)
 
-        case ApprovalResponse.validate(response, suspension.approval_request) do
-          :ok ->
-            handle_hitl_decision(agent, response)
+              {:error, reason} ->
+                {agent,
+                 [
+                   %Directive.Error{
+                     error: %RuntimeError{message: "HITL validation failed: #{reason}"}
+                   }
+                 ]}
+            end
 
           {:error, reason} ->
             {agent,
              [
                %Directive.Error{
-                 error: %RuntimeError{message: "HITL validation failed: #{reason}"}
+                 error: %RuntimeError{message: "HITL response invalid: #{reason}"}
                }
              ]}
         end
@@ -446,8 +454,18 @@ defmodule Jido.Composer.Workflow.Strategy do
         %{s | status: :waiting, pending_suspension: suspension}
       end)
 
-    {:ok, directive} = SuspendForHuman.new(approval_request: request)
-    {agent, [directive]}
+    case SuspendForHuman.new(approval_request: request) do
+      {:ok, directive} ->
+        {agent, [directive]}
+
+      {:error, reason} ->
+        {agent,
+         [
+           %Directive.Error{
+             error: %RuntimeError{message: "Failed to create HITL directive: #{reason}"}
+           }
+         ]}
+    end
   end
 
   defp handle_node_suspend(agent, result, strat) do
@@ -489,25 +507,33 @@ defmodule Jido.Composer.Workflow.Strategy do
   defp handle_hitl_resume(agent, suspension, params) do
     response_data = params[:response_data] || params
 
-    {:ok, response} =
-      ApprovalResponse.new(
-        request_id: response_data[:request_id] || suspension.approval_request.id,
-        decision: response_data[:decision] || response_data[:outcome],
-        data: Map.get(response_data, :data),
-        respondent: Map.get(response_data, :respondent),
-        comment: Map.get(response_data, :comment),
-        responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
-      )
+    case ApprovalResponse.new(
+           request_id: response_data[:request_id] || suspension.approval_request.id,
+           decision: response_data[:decision] || response_data[:outcome],
+           data: Map.get(response_data, :data),
+           respondent: Map.get(response_data, :respondent),
+           comment: Map.get(response_data, :comment),
+           responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
+         ) do
+      {:ok, response} ->
+        case ApprovalResponse.validate(response, suspension.approval_request) do
+          :ok ->
+            handle_hitl_decision(agent, response)
 
-    case ApprovalResponse.validate(response, suspension.approval_request) do
-      :ok ->
-        handle_hitl_decision(agent, response)
+          {:error, reason} ->
+            {agent,
+             [
+               %Directive.Error{
+                 error: %RuntimeError{message: "HITL validation failed: #{reason}"}
+               }
+             ]}
+        end
 
       {:error, reason} ->
         {agent,
          [
            %Directive.Error{
-             error: %RuntimeError{message: "HITL validation failed: #{reason}"}
+             error: %RuntimeError{message: "HITL response invalid: #{reason}"}
            }
          ]}
     end
@@ -821,7 +847,7 @@ defmodule Jido.Composer.Workflow.Strategy do
         {state_name, node}
 
       {state_name, {:agent, agent_module, opts}} ->
-        {:ok, node} = AgentNode.new(agent_module, opts: opts)
+        {:ok, node} = AgentNode.new(agent_module, opts)
         {state_name, node}
 
       {state_name, %ActionNode{} = node} ->

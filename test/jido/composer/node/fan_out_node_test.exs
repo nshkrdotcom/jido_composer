@@ -268,6 +268,53 @@ defmodule Jido.Composer.Node.FanOutNodeTest do
     end
   end
 
+  describe "process_results/2 preserves branch order" do
+    test "results are returned in the original branch definition order" do
+      # Use a custom merge function that captures the raw ordered list
+      # to verify process_results preserves insertion order.
+      capture_order = fn results ->
+        %{ordered_names: Enum.map(results, fn {name, _} -> name end)}
+      end
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "order_test",
+          branches: [
+            alpha: fn _ctx -> {:ok, %{val: 1}} end,
+            bravo: fn _ctx -> {:ok, %{val: 2}} end,
+            charlie: fn _ctx -> {:ok, %{val: 3}} end,
+            delta: fn _ctx -> {:ok, %{val: 4}} end
+          ],
+          merge: capture_order
+        )
+
+      assert {:ok, %{ordered_names: names}} = FanOutNode.run(fan_out, %{})
+      assert names == [:alpha, :bravo, :charlie, :delta]
+    end
+
+    test "collect_partial preserves order even with errors" do
+      capture_order = fn results ->
+        %{ordered_names: Enum.map(results, fn {name, _} -> name end)}
+      end
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "partial_order_test",
+          branches: [
+            first: fn _ctx -> {:ok, %{val: 1}} end,
+            second: fn _ctx -> {:error, :boom} end,
+            third: fn _ctx -> {:ok, %{val: 3}} end,
+            fourth: fn _ctx -> {:ok, %{val: 4}} end
+          ],
+          on_error: :collect_partial,
+          merge: capture_order
+        )
+
+      assert {:ok, %{ordered_names: names}} = FanOutNode.run(fan_out, %{})
+      assert names == [:first, :second, :third, :fourth]
+    end
+  end
+
   describe "run/2 merge with NodeIO" do
     test "merge_results handles mixed NodeIO and bare map branches" do
       {:ok, fan_out} =

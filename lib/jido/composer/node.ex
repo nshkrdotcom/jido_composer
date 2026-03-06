@@ -25,4 +25,29 @@ defmodule Jido.Composer.Node do
   @callback output_type(node :: struct()) :: :map | :text | :object | :any
 
   @optional_callbacks [schema: 1, input_type: 1, output_type: 1]
+
+  @doc "Returns `true` if `module` is a compiled `Jido.Agent` module."
+  @spec agent_module?(module()) :: boolean()
+  def agent_module?(module) do
+    Code.ensure_loaded?(module) && function_exported?(module, :__agent_metadata__, 0)
+  end
+
+  @doc "Runs a child agent module synchronously via `run_sync/2` or `query_sync/3`."
+  @spec execute_child_sync(module(), map()) :: {:ok, term()} | {:error, term()}
+  def execute_child_sync(child_module, spawn_opts) do
+    context = Map.get(spawn_opts, :context, %{})
+    child_agent = child_module.new()
+
+    cond do
+      function_exported?(child_module, :run_sync, 2) ->
+        child_module.run_sync(child_agent, context)
+
+      function_exported?(child_module, :query_sync, 3) ->
+        query = Map.get(context, :query, "")
+        child_module.query_sync(child_agent, query, context)
+
+      true ->
+        {:error, :agent_not_sync_runnable}
+    end
+  end
 end

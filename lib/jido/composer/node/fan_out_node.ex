@@ -119,29 +119,34 @@ defmodule Jido.Composer.Node.FanOutNode do
   end
 
   defp process_results(results, :fail_fast) do
-    Enum.reduce_while(results, {:ok, []}, fn
-      {:ok, {name, {:ok, result}}}, {:ok, acc} ->
-        {:cont, {:ok, acc ++ [{name, result}]}}
+    case Enum.reduce_while(results, {:ok, []}, fn
+           {:ok, {name, {:ok, result}}}, {:ok, acc} ->
+             {:cont, {:ok, [{name, result} | acc]}}
 
-      {:ok, {name, {:ok, result, _outcome}}}, {:ok, acc} ->
-        {:cont, {:ok, acc ++ [{name, result}]}}
+           {:ok, {name, {:ok, result, _outcome}}}, {:ok, acc} ->
+             {:cont, {:ok, [{name, result} | acc]}}
 
-      {:ok, {_name, {:error, reason}}}, _acc ->
-        {:halt, {:error, {:branch_failed, reason}}}
+           {:ok, {_name, {:error, reason}}}, _acc ->
+             {:halt, {:error, {:branch_failed, reason}}}
 
-      {:exit, reason}, _acc ->
-        {:halt, {:error, {:branch_crashed, reason}}}
-    end)
+           {:exit, reason}, _acc ->
+             {:halt, {:error, {:branch_crashed, reason}}}
+         end) do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      {:error, _} = error -> error
+    end
   end
 
   defp process_results(results, :collect_partial) do
     branch_results =
-      Enum.reduce(results, [], fn
-        {:ok, {name, {:ok, result}}}, acc -> acc ++ [{name, result}]
-        {:ok, {name, {:ok, result, _outcome}}}, acc -> acc ++ [{name, result}]
-        {:ok, {name, {:error, reason}}}, acc -> acc ++ [{name, {:error, reason}}]
+      results
+      |> Enum.reduce([], fn
+        {:ok, {name, {:ok, result}}}, acc -> [{name, result} | acc]
+        {:ok, {name, {:ok, result, _outcome}}}, acc -> [{name, result} | acc]
+        {:ok, {name, {:error, reason}}}, acc -> [{name, {:error, reason}} | acc]
         {:exit, _reason}, acc -> acc
       end)
+      |> Enum.reverse()
 
     {:ok, branch_results}
   end

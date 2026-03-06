@@ -441,6 +441,113 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
     end
   end
 
+  describe "approval rejection scopes context via scope_atom" do
+    test "rejection with continue_siblings policy scopes context under tool atom" do
+      # This test exercises handle_approval_rejection/4.
+      # The bug: it used String.to_existing_atom(call.name) instead of scope_atom(agent, call.name).
+      # scope_atom looks up from the pre-registered name_atoms map; String.to_existing_atom would
+      # crash with ArgumentError for names not yet interned as atoms.
+      tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 10.0, "amount" => 5.0}}
+      LLMStub.setup([{:tool_calls, [tool_call]}])
+
+      strategy_opts = [
+        nodes: [AddAction, EchoAction],
+        model: "stub:test-model",
+        system_prompt: "test",
+        max_iterations: 10,
+        req_options: [],
+        gated_nodes: ["add"],
+        rejection_policy: :continue_siblings
+      ]
+
+      agent = TestOrchestratorAgent.new()
+      ctx = %{strategy_opts: strategy_opts}
+      {agent, _} = Strategy.init(agent, ctx)
+
+      # Start -> LLM call
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir)
+
+      # LLM returns tool call -> gated
+      {agent, _directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      state = get_state(agent)
+      assert state.status == :awaiting_approval
+
+      # Find the request_id from gated_calls
+      [{request_id, _entry}] = Map.to_list(state.gated_calls)
+
+      # Now reject the tool call
+      {agent, _directives} =
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:hitl_response, %{
+              request_id: request_id,
+              decision: :rejected,
+              comment: "Not allowed"
+            })
+          ],
+          ctx()
+        )
+
+      state = get_state(agent)
+      # The rejection context should be scoped under the :add atom key (via scope_atom)
+      assert %{add: %{error: "REJECTED: Not allowed"}} = state.context
+      assert state.gated_calls == %{}
+    end
+
+    test "rejection with cancel_siblings policy scopes context under tool atom" do
+      tool_call = %{id: "call_1", name: "add", arguments: %{"value" => 10.0, "amount" => 5.0}}
+      LLMStub.setup([{:tool_calls, [tool_call]}])
+
+      strategy_opts = [
+        nodes: [AddAction, EchoAction],
+        model: "stub:test-model",
+        system_prompt: "test",
+        max_iterations: 10,
+        req_options: [],
+        gated_nodes: ["add"],
+        rejection_policy: :cancel_siblings
+      ]
+
+      agent = TestOrchestratorAgent.new()
+      ctx = %{strategy_opts: strategy_opts}
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Add"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir)
+
+      {agent, _directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      state = get_state(agent)
+      [{request_id, _entry}] = Map.to_list(state.gated_calls)
+
+      {agent, _directives} =
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:hitl_response, %{
+              request_id: request_id,
+              decision: :rejected,
+              comment: "Denied"
+            })
+          ],
+          ctx()
+        )
+
+      state = get_state(agent)
+      assert %{add: %{error: "REJECTED: Denied"}} = state.context
+      assert state.gated_calls == %{}
+    end
+  end
+
   describe "signal_routes/1" do
     test "returns routes for orchestrator signals" do
       routes = Strategy.signal_routes(%{})

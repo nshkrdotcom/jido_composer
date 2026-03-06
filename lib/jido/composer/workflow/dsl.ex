@@ -128,7 +128,7 @@ defmodule Jido.Composer.Workflow.DSL do
         run_directives(module, agent, new_directives ++ rest)
 
       %Jido.Agent.Directive.SpawnAgent{agent: child_module, tag: tag, opts: spawn_opts} ->
-        payload = execute_child_sync(child_module, spawn_opts)
+        payload = Jido.Composer.Node.execute_child_sync(child_module, spawn_opts)
 
         {agent, new_directives} =
           module.cmd(agent, {:workflow_child_result, %{tag: tag, result: payload}})
@@ -173,9 +173,10 @@ defmodule Jido.Composer.Workflow.DSL do
       ordered: true,
       max_concurrency: length(fan_out_directives)
     )
+    |> Enum.zip(fan_out_directives)
     |> Enum.map(fn
-      {:ok, {name, result}} -> {name, result}
-      {:exit, reason} -> {nil, {:error, {:branch_crashed, reason}}}
+      {{:ok, {name, result}}, _branch} -> {name, result}
+      {{:exit, reason}, branch} -> {branch.branch_name, {:error, {:branch_crashed, reason}}}
     end)
   end
 
@@ -195,24 +196,7 @@ defmodule Jido.Composer.Workflow.DSL do
   end
 
   defp execute_fan_out_branch(%Jido.Composer.Directive.FanOutBranch{spawn_agent: spawn_info}) do
-    execute_child_sync(spawn_info.agent, spawn_info.opts)
-  end
-
-  defp execute_child_sync(child_module, spawn_opts) do
-    context = Map.get(spawn_opts, :context, %{})
-    child_agent = child_module.new()
-
-    cond do
-      function_exported?(child_module, :run_sync, 2) ->
-        child_module.run_sync(child_agent, context)
-
-      function_exported?(child_module, :query_sync, 3) ->
-        query = Map.get(context, :query, "")
-        child_module.query_sync(child_agent, query, context)
-
-      true ->
-        {:error, :agent_not_sync_runnable}
-    end
+    Jido.Composer.Node.execute_child_sync(spawn_info.agent, spawn_info.opts)
   end
 
   defp execute_sync(%Jido.Instruction{action: action_module, params: params}) do
@@ -242,14 +226,14 @@ defmodule Jido.Composer.Workflow.DSL do
   def __wrap_nodes__(nodes) when is_map(nodes) do
     Map.new(nodes, fn
       {state, {module, opts}} when is_atom(module) and is_list(opts) ->
-        if agent_module?(module) do
+        if Jido.Composer.Node.agent_module?(module) do
           {state, {:agent, module, opts}}
         else
           {state, {:action, module}}
         end
 
       {state, module} when is_atom(module) ->
-        if agent_module?(module) do
+        if Jido.Composer.Node.agent_module?(module) do
           {state, {:agent, module, []}}
         else
           {state, {:action, module}}
@@ -258,10 +242,6 @@ defmodule Jido.Composer.Workflow.DSL do
       {state, other} ->
         {state, other}
     end)
-  end
-
-  defp agent_module?(module) do
-    Code.ensure_loaded?(module) && function_exported?(module, :__agent_metadata__, 0)
   end
 
   @doc false

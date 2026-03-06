@@ -318,6 +318,44 @@ defmodule Jido.Composer.Workflow.StrategyTest do
     end
   end
 
+  describe "build_nodes AgentNode opts passthrough" do
+    test "agent tuple opts are passed directly to AgentNode.new without double-wrapping" do
+      alias Jido.Composer.Node.AgentNode
+
+      agent_opts = [mode: :sync]
+
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{
+            step: {:action, Jido.Composer.TestActions.AddAction},
+            delegate: {:agent, Jido.Composer.TestAgents.EchoAgent, agent_opts}
+          },
+          transitions: %{
+            {:step, :ok} => :delegate,
+            {:delegate, :ok} => :done,
+            {:_, :error} => :failed
+          },
+          initial: :step
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _directives} = Strategy.init(agent, ctx)
+
+      strat = StratState.get(agent)
+      delegate_node = strat.machine.nodes[:delegate]
+
+      # The node must be an AgentNode
+      assert %AgentNode{} = delegate_node
+      # mode: should be :sync from the opts, not lost inside a nested opts key
+      assert delegate_node.mode == :sync
+      # opts should be [] (no extra opts beyond mode), NOT [mode: :sync]
+      # because mode is extracted by AgentNode.new and stored in the :mode field
+      assert delegate_node.opts == []
+    end
+  end
+
   describe "signal_routes/1" do
     test "declares workflow signal routes" do
       routes = Strategy.signal_routes(%{})

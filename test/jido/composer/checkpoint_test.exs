@@ -121,6 +121,43 @@ defmodule Jido.Composer.CheckpointTest do
     end
   end
 
+  describe "migrate/2" do
+    test "v1 → v2 adds :children field" do
+      v1_state = %{
+        module: Jido.Composer.Workflow.Strategy,
+        status: :running,
+        machine: %{status: :process}
+      }
+
+      migrated = Checkpoint.migrate(v1_state, 1)
+      assert migrated.children == %{}
+      # Original fields preserved
+      assert migrated.module == Jido.Composer.Workflow.Strategy
+      assert migrated.status == :running
+      assert migrated.machine == %{status: :process}
+    end
+
+    test "v1 → v2 does not overwrite existing :children" do
+      v1_state = %{
+        status: :running,
+        children: %{child1: :ref}
+      }
+
+      migrated = Checkpoint.migrate(v1_state, 1)
+      assert migrated.children == %{child1: :ref}
+    end
+
+    test "v2 is a no-op for current version" do
+      v2_state = %{
+        status: :running,
+        children: %{},
+        machine: %{status: :done}
+      }
+
+      assert Checkpoint.migrate(v2_state, 2) == v2_state
+    end
+  end
+
   describe "checkpoint schema version" do
     test "checkpoint schema version is :composer_v2" do
       assert Checkpoint.schema_version() == :composer_v2

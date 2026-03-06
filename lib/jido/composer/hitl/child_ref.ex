@@ -7,5 +7,7 @@ defmodule Jido.Composer.HITL.ChildRef do
   This module delegates to the new location for backward compatibility.
   """
 
+  @type t :: Jido.Composer.ChildRef.t()
+
   defdelegate new(attrs), to: Jido.Composer.ChildRef
 end
