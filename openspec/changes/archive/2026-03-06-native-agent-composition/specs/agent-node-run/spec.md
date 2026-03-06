@@ -53,6 +53,18 @@ The `run_directives/3` function in `Jido.Composer.Workflow.DSL` SHALL handle `Sp
 
 - **WHEN** `run_directives/3` encounters a `SpawnAgent` directive for an agent with `query_sync/3`
 - **THEN** it SHALL call `child_module.query_sync(child_module.new(), query, context)` and feed the result back as `{:workflow_child_result, %{tag: tag, result: result}}`
+- **AND** the raw `query_sync` result (which may be a bare string after `unwrap_result`) SHALL be passed through — `Machine.apply_result`'s `resolve_result/1` handles type adaptation
+
+### Requirement: execute_child_sync passes raw results
+
+`Node.execute_child_sync/2` SHALL pass the raw `run_sync/2` or `query_sync/3` return value through without wrapping. This differs from `AgentNode.run/3` which wraps `query_sync` results in `%{result: result}`.
+
+#### Scenario: Orchestrator child returns bare string via execute_child_sync
+
+- **WHEN** `execute_child_sync(orchestrator_module, opts)` is called
+- **AND** the orchestrator's `query_sync/3` returns `{:ok, "answer text"}`
+- **THEN** `execute_child_sync` SHALL return `{:ok, "answer text"}` (not `{:ok, %{result: "answer text"}}`)
+- **AND** the workflow strategy's `Machine.apply_result` SHALL resolve the bare string via `resolve_result/1` to `%{text: "answer text"}`
 
 ### Requirement: Orchestrator DSL run_orch_directives handles SpawnAgent
 

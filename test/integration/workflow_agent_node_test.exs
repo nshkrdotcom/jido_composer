@@ -145,6 +145,88 @@ defmodule Jido.Composer.Integration.WorkflowAgentNodeTest do
     end
   end
 
+  # -- execute_child_sync bare result tests --
+
+  describe "execute_child_sync result adaptation" do
+    test "workflow handles bare string result from child agent via Machine.apply_result" do
+      # Simulates the path: execute_child_sync → query_sync → unwrap_result → bare string
+      # → workflow_child_result handler → Machine.apply_result → resolve_result
+      agent = AgentStepWorkflow.new()
+      {agent, directives} = AgentStepWorkflow.run(agent, %{source: "test_db"})
+
+      # Execute extract step normally
+      payload = execute_instruction(hd(directives).instruction)
+      {agent, directives2} = AgentStepWorkflow.cmd(agent, {:workflow_node_result, payload})
+
+      # SpawnAgent for process step
+      assert [%Directive.SpawnAgent{}] = directives2
+
+      # Simulate child_started
+      {agent, _} =
+        AgentStepWorkflow.cmd(agent, {:workflow_child_started, %{tag: nil, child_pid: self()}})
+
+      # Simulate child returning a bare string (as orchestrator query_sync does)
+      {agent, result_directives} =
+        AgentStepWorkflow.cmd(
+          agent,
+          {:workflow_child_result, %{tag: nil, result: {:ok, "analysis complete"}}}
+        )
+
+      strat = StratState.get(agent)
+
+      # The bare string should be resolved to %{text: "analysis complete"} and scoped under :process
+      assert strat.machine.context.working[:process] == %{text: "analysis complete"}
+      # Workflow should have advanced past the process step
+      assert strat.machine.status != :process
+      assert result_directives != [] || strat.machine.status == :done
+    end
+
+    test "workflow handles bare map result from child agent" do
+      agent = AgentStepWorkflow.new()
+      {agent, directives} = AgentStepWorkflow.run(agent, %{source: "test_db"})
+
+      payload = execute_instruction(hd(directives).instruction)
+      {agent, directives2} = AgentStepWorkflow.cmd(agent, {:workflow_node_result, payload})
+
+      assert [%Directive.SpawnAgent{}] = directives2
+
+      {agent, _} =
+        AgentStepWorkflow.cmd(agent, {:workflow_child_started, %{tag: nil, child_pid: self()}})
+
+      # Simulate child returning a map result (as workflow run_sync does)
+      {agent, _result_directives} =
+        AgentStepWorkflow.cmd(
+          agent,
+          {:workflow_child_result, %{tag: nil, result: {:ok, %{score: 0.95, label: "positive"}}}}
+        )
+
+      strat = StratState.get(agent)
+      assert strat.machine.context.working[:process] == %{score: 0.95, label: "positive"}
+    end
+
+    test "workflow handles integer result from child agent" do
+      agent = AgentStepWorkflow.new()
+      {agent, directives} = AgentStepWorkflow.run(agent, %{source: "test_db"})
+
+      payload = execute_instruction(hd(directives).instruction)
+      {agent, directives2} = AgentStepWorkflow.cmd(agent, {:workflow_node_result, payload})
+
+      assert [%Directive.SpawnAgent{}] = directives2
+
+      {agent, _} =
+        AgentStepWorkflow.cmd(agent, {:workflow_child_started, %{tag: nil, child_pid: self()}})
+
+      {agent, _result_directives} =
+        AgentStepWorkflow.cmd(
+          agent,
+          {:workflow_child_result, %{tag: nil, result: {:ok, 42}}}
+        )
+
+      strat = StratState.get(agent)
+      assert strat.machine.context.working[:process] == %{value: 42}
+    end
+  end
+
   # -- DSL run_sync tests --
 
   describe "AgentNode via run_sync" do

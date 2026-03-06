@@ -76,6 +76,40 @@ defmodule Jido.Composer.Directive.SuspendForHumanTest do
     end
   end
 
+  describe "consumer pattern matching" do
+    setup do
+      {:ok, request} =
+        ApprovalRequest.new(
+          prompt: "Approve deployment?",
+          allowed_responses: [:approved, :rejected],
+          timeout: 30_000
+        )
+
+      {:ok, request: request}
+    end
+
+    test "directive matches %Suspend{} not %SuspendForHuman{}", %{request: request} do
+      {:ok, directive} = SuspendForHuman.new(approval_request: request)
+
+      # Consumer code must match on %Suspend{}, not %SuspendForHuman{}
+      assert %Suspend{suspension: suspension} = directive
+      assert suspension.reason == :human_input
+      assert suspension.approval_request == request
+
+      # SuspendForHuman struct match must NOT work
+      refute match?(%SuspendForHuman{}, directive)
+    end
+
+    test "approval_request is accessed via suspension.approval_request", %{request: request} do
+      {:ok, directive} = SuspendForHuman.new(approval_request: request)
+
+      # The correct access path for consumers
+      %Suspend{suspension: suspension} = directive
+      assert suspension.approval_request.prompt == "Approve deployment?"
+      assert suspension.approval_request.allowed_responses == [:approved, :rejected]
+    end
+  end
+
   describe "serialization" do
     test "is fully serializable with :erlang.term_to_binary" do
       {:ok, request} =

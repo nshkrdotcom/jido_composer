@@ -228,6 +228,30 @@ defmodule Jido.Composer.Workflow.MachineTest do
       assert machine.context.working == %{extract: %{key: "value"}}
     end
 
+    test "resolves bare string to %{text: string}" do
+      machine = linear_machine()
+      machine = Machine.apply_result(machine, "hello world")
+      assert machine.context.working == %{extract: %{text: "hello world"}}
+    end
+
+    test "resolves arbitrary term to %{value: term}" do
+      machine = linear_machine()
+      machine = Machine.apply_result(machine, 42)
+      assert machine.context.working == %{extract: %{value: 42}}
+    end
+
+    test "resolves list term to %{value: list}" do
+      machine = linear_machine()
+      machine = Machine.apply_result(machine, [1, 2, 3])
+      assert machine.context.working == %{extract: %{value: [1, 2, 3]}}
+    end
+
+    test "resolves nil to %{value: nil}" do
+      machine = linear_machine()
+      machine = Machine.apply_result(machine, nil)
+      assert machine.context.working == %{extract: %{value: nil}}
+    end
+
     test "resolves NodeIO.map to map" do
       machine = linear_machine()
       machine = Machine.apply_result(machine, NodeIO.map(%{key: "value"}))

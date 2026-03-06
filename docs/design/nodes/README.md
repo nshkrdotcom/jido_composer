@@ -159,6 +159,26 @@ The dual-path principle means FanOutNode branches can be AgentNodes (the branch
 calls `run/3`), while the strategy can still use SpawnAgent for process-based
 lifecycle management.
 
+#### `execute_child_sync` vs `AgentNode.run/3`
+
+There are two sync execution paths with different result wrapping:
+
+| Path                        | `query_sync` result wrapping | Used by                             |
+| --------------------------- | ---------------------------- | ----------------------------------- |
+| `AgentNode.run/3`           | `{:ok, %{result: result}}`   | FanOutNode branches, direct `run/3` |
+| `Node.execute_child_sync/2` | `{:ok, result}` (raw)        | Workflow DSL `run_directives/3`     |
+
+`AgentNode.run/3` wraps `query_sync` results in `%{result: result}` to satisfy
+the Node contract (output must be a map). `execute_child_sync` passes the raw
+`query_sync`/`run_sync` return through — the caller (workflow strategy) is
+responsible for adaptation via
+[`resolve_result/1`](typed-io.md#mergeable-check).
+
+This means orchestrator children in workflows produce bare strings (from
+`unwrap_result(NodeIO.text(...))`) that flow into `Machine.apply_result`. The
+Machine's `resolve_result/1` handles this by wrapping strings as
+`%{text: value}` — see [Typed I/O — Mergeable Check](typed-io.md#mergeable-check).
+
 **Sync mode** is the primary mode for [Workflow](../workflow/README.md)
 composition:
 

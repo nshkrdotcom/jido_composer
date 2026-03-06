@@ -82,7 +82,7 @@ defmodule Jido.Composer.Workflow.Machine do
     end
   end
 
-  @spec apply_result(t(), map() | NodeIO.t()) :: t()
+  @spec apply_result(t(), map() | NodeIO.t() | term()) :: t()
   def apply_result(%__MODULE__{status: status, context: context} = machine, result) do
     resolved = resolve_result(result)
     %{machine | context: Context.apply_result(context, status, resolved)}
@@ -90,6 +90,8 @@ defmodule Jido.Composer.Workflow.Machine do
 
   defp resolve_result(%NodeIO{} = io), do: NodeIO.to_map(io)
   defp resolve_result(result) when is_map(result), do: result
+  defp resolve_result(result) when is_binary(result), do: %{text: result}
+  defp resolve_result(result), do: %{value: result}
 
   # Transition lookup with fallback chain:
   # 1. {state, outcome} — exact match

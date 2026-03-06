@@ -41,11 +41,12 @@ unwraps as needed.
 
 | Location                                                          | Direction    | Operation                                                                                     |
 | ----------------------------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------- |
-| [Machine](../workflow/state-machine.md) `apply_result/2`          | Envelope in  | `to_map/1` before deep merge                                                                  |
+| [Machine](../workflow/state-machine.md) `apply_result/2`          | Resolve      | `resolve_result/1` — handles NodeIO, maps, strings, and any term                              |
 | [Orchestrator Strategy](../orchestrator/strategy.md) final answer | Wrap         | Text wrapped as `NodeIO.text/1`                                                               |
 | [AgentTool](../orchestrator/README.md#agenttool-adapter) result   | Unwrap       | `unwrap/1` for LLM serialization                                                              |
 | [FanOutNode](README.md#fanoutnode) merge                          | Per-branch   | Each branch result resolved via `to_map/1`                                                    |
 | `query_sync` / `run_sync` return value                            | Unwrap       | `unwrap/1` for the end user (API unchanged)                                                   |
+| `execute_child_sync` return value                                 | Raw          | Passes raw `query_sync`/`run_sync` result; `resolve_result/1` adapts at the Machine           |
 | Agent boundary (`emit_to_parent`)                                 | Pass-through | NodeIO flows as part of the result signal; parent's `apply_result` resolves it via `to_map/1` |
 
 The adaptation is transparent to both nodes and API consumers. Nodes produce
@@ -69,8 +70,21 @@ adaptation. The `mergeable?/1` function distinguishes:
 | `:text`   | No         | Must be wrapped in `%{text: ...}` first   |
 | `:object` | No         | Must be wrapped in `%{object: ...}` first |
 
-`resolve_result/1` in the Machine handles both `NodeIO` structs and bare maps,
-providing backward compatibility.
+`resolve_result/1` in the Machine is the **universal adaptation point** for all
+result types flowing into context. It handles:
+
+| Input type     | Output            | Source                                             |
+| -------------- | ----------------- | -------------------------------------------------- |
+| `%NodeIO{}`    | `to_map/1` result | Orchestrator final answer, typed node output       |
+| `map()`        | The map itself    | ActionNode results, workflow `run_sync` returns    |
+| `String.t()`   | `%{text: value}`  | Orchestrator `query_sync` via `execute_child_sync` |
+| Any other term | `%{value: term}`  | Catch-all for future return types                  |
+
+The bare string case arises specifically when an orchestrator child is nested in
+a workflow via `execute_child_sync`. The chain is:
+`query_sync → unwrap_result(NodeIO.text("...")) → bare string`. Since
+`execute_child_sync` returns the raw `query_sync` result (without NodeIO
+wrapping), `resolve_result/1` must handle the unwrapped string directly.
 
 ## Optional Type Declarations
 

@@ -146,13 +146,15 @@ defmodule Jido.Composer.SuspensionTest do
 
     test "rejects non-ApprovalRequest struct" do
       assert_raise FunctionClauseError, fn ->
-        Suspension.from_approval_request(%{prompt: "not a request"})
+        apply(Suspension, :from_approval_request, [%{prompt: "not a request"}])
       end
     end
 
     test "rejects plain map" do
       assert_raise FunctionClauseError, fn ->
-        Suspension.from_approval_request(%{id: "x", prompt: "y", allowed_responses: [:yes]})
+        apply(Suspension, :from_approval_request, [
+          %{id: "x", prompt: "y", allowed_responses: [:yes]}
+        ])
       end
     end
   end

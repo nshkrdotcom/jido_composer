@@ -71,6 +71,16 @@ The NodeIO struct SHALL derive `Jason.Encoder` for serialization.
 - **WHEN** `Machine.apply_result(machine, %{key: "value"})` is called
 - **THEN** the machine context SHALL contain `%{state_name: %{key: "value"}}` (backward compatible)
 
+#### Scenario: Bare string result wrapped
+
+- **WHEN** `Machine.apply_result(machine, "analysis complete")` is called (e.g., from `execute_child_sync` with an orchestrator child)
+- **THEN** the machine context SHALL contain `%{state_name: %{text: "analysis complete"}}`
+
+#### Scenario: Arbitrary term result wrapped
+
+- **WHEN** `Machine.apply_result(machine, 42)` is called
+- **THEN** the machine context SHALL contain `%{state_name: %{value: 42}}`
+
 ### Requirement: Orchestrator wraps final answers as NodeIO.text
 
 The Orchestrator strategy SHALL wrap `{:final_answer, text}` LLM responses as `NodeIO.text(text)` in the strategy result.
