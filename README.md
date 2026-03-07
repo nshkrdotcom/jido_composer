@@ -2,28 +2,119 @@
 
 Composable agent flows via FSM for the [Jido](https://github.com/agentjido/jido) ecosystem.
 
-Jido Composer provides two composition patterns that are mutually composable — a Workflow can contain an Orchestrator, an Orchestrator can invoke a Workflow, and both can nest arbitrarily.
+Two composition patterns that nest arbitrarily:
 
-## Patterns
+- **Workflow** — Deterministic FSM pipeline (states + transitions)
+- **Orchestrator** — LLM-driven dynamic tool use (ReAct loop)
 
-- **Workflow** — Deterministic FSM-based pipeline. Each state binds to an action or sub-agent. Transitions are fully determined by outcomes.
-- **Orchestrator** — An agent that uses an LLM to dynamically compose available sub-agents and actions at runtime via a ReAct-style loop.
+## Example: Workflow
 
-Both share a **Node** abstraction (uniform `context -> context` interface) and support arbitrary nesting.
+Define actions and wire them into an FSM:
+
+```elixir
+defmodule ExtractAction do
+  use Jido.Action,
+    name: "extract",
+    description: "Extract records from a data source",
+    schema: [source: [type: :string, required: true]]
+
+  @impl true
+  def run(%{source: source}, _ctx) do
+    {:ok, %{records: [%{id: 1, name: "Alice"}, %{id: 2, name: "Bob"}], source: source}}
+  end
+end
+
+defmodule TransformAction do
+  use Jido.Action, name: "transform", description: "Transform records", schema: []
+
+  @impl true
+  def run(params, _ctx) do
+    records = get_in(params, [:extract, :records]) || []
+    {:ok, %{records: Enum.map(records, &Map.put(&1, :processed, true))}}
+  end
+end
+
+defmodule LoadAction do
+  use Jido.Action, name: "load", description: "Load records", schema: []
+
+  @impl true
+  def run(params, _ctx) do
+    records = get_in(params, [:transform, :records]) || []
+    {:ok, %{loaded: length(records)}}
+  end
+end
+
+defmodule ETLPipeline do
+  use Jido.Composer.Workflow,
+    name: "etl_pipeline",
+    nodes: %{
+      extract:   ExtractAction,
+      transform: TransformAction,
+      load:      LoadAction
+    },
+    transitions: %{
+      {:extract, :ok}   => :transform,
+      {:transform, :ok} => :load,
+      {:load, :ok}      => :done,
+      {:_, :error}      => :failed
+    },
+    initial: :extract
+end
+
+agent = ETLPipeline.new()
+{:ok, result} = ETLPipeline.run_sync(agent, %{source: "customer_db"})
+# result[:load][:loaded] => 2
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> extract
+    extract --> transform : ok
+    transform --> load : ok
+    load --> done : ok
+    extract --> failed : error
+    transform --> failed : error
+    load --> failed : error
+```
+
+## Example: Orchestrator
+
+Give an LLM tools and let it decide what to call:
+
+```elixir
+defmodule AddAction do
+  use Jido.Action,
+    name: "add",
+    description: "Add two numbers",
+    schema: [value: [type: :float, required: true], amount: [type: :float, required: true]]
+
+  @impl true
+  def run(%{value: v, amount: a}, _ctx), do: {:ok, %{result: v + a}}
+end
+
+defmodule MathAssistant do
+  use Jido.Composer.Orchestrator,
+    name: "math_assistant",
+    model: "anthropic:claude-sonnet-4-20250514",
+    nodes: [AddAction],
+    system_prompt: "You are a math assistant. Use the available tools."
+end
+
+agent = MathAssistant.new()
+{:ok, answer} = MathAssistant.query_sync(agent, "What is 5 + 3?")
+```
 
 ## Key Features
 
-- **Uniform Node interface** — Actions, agents, human gates, and fan-out branches all implement the same `context -> context` contract
-- **Context accumulation** — Scoped deep merge prevents cross-node key collisions
-- **Generalized suspension** — Any node can pause a flow for human input, rate limits, async completion, or external jobs
-- **Persistence cascade** — Checkpoint, thaw, and resume agent trees across process restarts with automatic replay of in-flight operations
-- **Fan-out with partial completion** — Parallel branches with backpressure, where individual branches can suspend independently
-- **LLM integration** — Provider-agnostic via [req_llm](https://hexdocs.pm/req_llm), with tool approval gates and streaming support
-- **Pure strategies** — All side effects described as directives; strategies are testable without a running runtime
+- Uniform Node interface — actions, agents, human gates, fan-out all compose
+- Context layering — ambient config + working state + fork transforms
+- Generalized suspension — human input, rate limits, async, external jobs
+- Persistence cascade — checkpoint/thaw/resume across restarts
+- Fan-out with backpressure and partial completion
+- LLM integration via [req_llm](https://hexdocs.pm/req_llm) with tool approval gates
+- Pure strategies — testable without a running runtime
 
 ## Installation
-
-Add `jido_composer` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
@@ -35,5 +126,13 @@ end
 
 ## Documentation
 
-- [Design Documentation](docs/design/README.md) — Architecture, components, and design decisions
-- API docs via `mix docs`
+- [Getting Started](guides/getting-started.md) — First workflow in 5 minutes
+- [Workflows Guide](guides/workflows.md) — All DSL options, fan-out, custom outcomes
+- [Orchestrators Guide](guides/orchestrators.md) — LLM config, tool approval, streaming
+- [Advanced Features](guides/advanced.md) — Nesting, HITL, suspension, persistence, testing
+- [Design Documentation](docs/design/README.md) — Architecture and design decisions
+- Interactive demos in `livebooks/`
+
+## License
+
+Apache-2.0

@@ -217,7 +217,7 @@ keeps the transport concern entirely within LLMAction and the test setup.
 
 ## LLMStub Patterns
 
-`Jido.Composer.TestSupport.LLMStub` (`test/support/llm_stub.ex`) provides
+Jido.Composer.TestSupport.LLMStub (`test/support/llm_stub.ex`) provides
 predetermined LLM responses for tests that do not need real HTTP interactions.
 It operates in two modes:
 

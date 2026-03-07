@@ -146,7 +146,7 @@ RunInstruction directives. Defined in `Jido.Instruction`.
 
 ### LLM Integration (LLMAction)
 
-An internal Jido Action (`Jido.Composer.Orchestrator.LLMAction`) that calls
+An internal Jido Action (Jido.Composer.Orchestrator.LLMAction) that calls
 [req_llm](https://hexdocs.pm/req_llm) directly for provider-agnostic LLM
 generation. Supports four modes: `generate_text`, `generate_object`,
 `stream_text`, `stream_object`. The [Orchestrator](#orchestrator) strategy

@@ -38,8 +38,8 @@ The fix belongs in `Jido.Persist` (the `jido` dependency), not in
 jido_composer:
 
 1. **Strip `__parent__.pid` during checkpoint.** In
-   `Jido.Persist.enforce_checkpoint_invariants/2` (or
-   `Jido.Persist.default_checkpoint/3` at ~line 337), set the `pid` field to
+   Jido.Persist `enforce_checkpoint_invariants/2` (or
+   Jido.Persist `default_checkpoint/3` at ~line 337), set the `pid` field to
    `nil` when a `ParentRef` is present in state:
 
    ```elixir

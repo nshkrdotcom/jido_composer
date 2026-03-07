@@ -106,7 +106,7 @@ All user-facing modules live under this namespace:
 | `Jido.Composer.Workflow.Machine`       | [FSM data structure](workflow/state-machine.md)                                                         |
 | `Jido.Composer.Orchestrator`           | [Orchestrator DSL](orchestrator/README.md) macro                                                        |
 | `Jido.Composer.Orchestrator.Strategy`  | [Orchestrator strategy](orchestrator/strategy.md)                                                       |
-| `Jido.Composer.Orchestrator.LLMAction` | [LLM integration](orchestrator/llm-integration.md) calling ReqLLM directly                              |
+| Jido.Composer.Orchestrator.LLMAction   | [LLM integration](orchestrator/llm-integration.md) calling ReqLLM directly                              |
 | `Jido.Composer.Orchestrator.AgentTool` | [Node-to-tool adapter](orchestrator/README.md#agenttool-adapter)                                        |
 | `Jido.Composer.Error`                  | [Structured errors](#error-handling)                                                                    |
 

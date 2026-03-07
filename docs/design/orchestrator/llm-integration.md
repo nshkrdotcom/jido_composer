@@ -42,7 +42,7 @@ graph TB
 
 ## LLMAction
 
-`Jido.Composer.Orchestrator.LLMAction` is a `Jido.Action` that the strategy
+Jido.Composer.Orchestrator.LLMAction is a Jido.Action that the strategy
 never calls directly. Instead, the strategy builds a `Jido.Instruction`
 targeting LLMAction and emits it as a `RunInstruction` directive. The runtime
 executes the action and routes the result back to the strategy as

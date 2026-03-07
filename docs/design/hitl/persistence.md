@@ -108,7 +108,7 @@ state of the computation at the moment of suspension.
 ## ParentRef PID Handling
 
 The `__parent__` field in child agent state contains a
-`Jido.AgentServer.ParentRef` struct with a `pid` field that is not serializable.
+Jido.AgentServer.ParentRef struct with a `pid` field that is not serializable.
 The `emit_to_parent/3` helper requires this PID to function. During
 checkpointing, the `pid` field must be stripped (set to `nil`). On resume, the
 parent re-spawns the child via `SpawnAgent`, which re-populates `__parent__`

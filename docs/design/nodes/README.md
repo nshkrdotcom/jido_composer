@@ -15,7 +15,7 @@ optional [outcome](../glossary.md#outcome):
 |                                    | `{:ok, context, outcome}` — success with explicit outcome for branching |
 |                                    | `{:error, reason}` — failure with implicit outcome `:error`             |
 
-This mirrors the `Jido.Action.run/2` signature but adds explicit outcome support
+This mirrors the Jido.Action `run/2` signature but adds explicit outcome support
 for driving [Workflow](../workflow/README.md) transitions.
 
 ## Callbacks
@@ -163,10 +163,10 @@ lifecycle management.
 
 There are two sync execution paths with different result wrapping:
 
-| Path                        | `query_sync` result wrapping | Used by                             |
-| --------------------------- | ---------------------------- | ----------------------------------- |
-| `AgentNode.run/3`           | `{:ok, %{result: result}}`   | FanOutNode branches, direct `run/3` |
-| `Node.execute_child_sync/2` | `{:ok, result}` (raw)        | Workflow DSL `run_directives/3`     |
+| Path                      | `query_sync` result wrapping | Used by                             |
+| ------------------------- | ---------------------------- | ----------------------------------- |
+| `AgentNode.run/3`         | `{:ok, %{result: result}}`   | FanOutNode branches, direct `run/3` |
+| Node.execute_child_sync/2 | `{:ok, result}` (raw)        | Workflow DSL `run_directives/3`     |
 
 `AgentNode.run/3` wraps `query_sync` results in `%{result: result}` to satisfy
 the Node contract (output must be a map). `execute_child_sync` passes the raw
