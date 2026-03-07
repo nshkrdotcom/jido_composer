@@ -169,33 +169,42 @@ defmodule Jido.Composer.Workflow.Strategy do
   def cmd(agent, [%Jido.Instruction{action: :suspend_resume} = instr | _rest], _ctx) do
     strat = StratState.get(agent)
     params = instr.params
+    suspension_id = params[:suspension_id]
 
-    case strat.pending_suspension do
-      nil ->
-        {agent, [%Directive.Error{error: %RuntimeError{message: "No pending suspension"}}]}
+    cond do
+      # Priority 1: Single-node suspension with matching ID
+      match?(%Suspension{id: ^suspension_id}, strat.pending_suspension) ->
+        suspension = strat.pending_suspension
 
-      %Suspension{id: id} = suspension ->
-        suspension_id = params[:suspension_id]
+        case suspension.reason do
+          :human_input ->
+            handle_hitl_resume(agent, suspension, params)
 
-        if suspension_id != id do
-          {agent,
-           [
-             %Directive.Error{
-               error: %RuntimeError{
-                 message:
-                   "Suspension ID mismatch: expected #{inspect(id)}, got #{inspect(suspension_id)}"
-               }
-             }
-           ]}
-        else
-          case suspension.reason do
-            :human_input ->
-              handle_hitl_resume(agent, suspension, params)
-
-            _other ->
-              handle_generic_resume(agent, params)
-          end
+          _other ->
+            handle_generic_resume(agent, params)
         end
+
+      # Priority 1b: Single-node suspension exists but ID mismatches
+      not is_nil(strat.pending_suspension) ->
+        id = strat.pending_suspension.id
+
+        {agent,
+         [
+           %Directive.Error{
+             error: %RuntimeError{
+               message:
+                 "Suspension ID mismatch: expected #{inspect(id)}, got #{inspect(suspension_id)}"
+             }
+           }
+         ]}
+
+      # Priority 2: Fan-out branch suspension
+      has_suspended_fan_out_branch?(strat, suspension_id) ->
+        handle_fan_out_branch_resume(agent, strat, suspension_id, params)
+
+      # Priority 3: No match
+      true ->
+        {agent, [%Directive.Error{error: %RuntimeError{message: "No pending suspension"}}]}
     end
   end
 
@@ -204,8 +213,9 @@ defmodule Jido.Composer.Workflow.Strategy do
     strat = StratState.get(agent)
     suspension_id = instr.params[:suspension_id]
 
-    case strat.pending_suspension do
-      %Suspension{id: ^suspension_id} = suspension ->
+    cond do
+      match?(%Suspension{id: ^suspension_id}, strat.pending_suspension) ->
+        suspension = strat.pending_suspension
         timeout_outcome = suspension.timeout_outcome
 
         agent =
@@ -225,7 +235,10 @@ defmodule Jido.Composer.Workflow.Strategy do
             {agent, []}
         end
 
-      _ ->
+      has_suspended_fan_out_branch?(strat, suspension_id) ->
+        handle_fan_out_branch_timeout(agent, strat, suspension_id)
+
+      true ->
         {agent, []}
     end
   end
@@ -355,6 +368,29 @@ defmodule Jido.Composer.Workflow.Strategy do
           Map.merge(details, %{
             reason: suspension.reason,
             suspension_id: suspension.id
+          })
+
+        _ ->
+          details
+      end
+
+    details =
+      case Map.get(strat, :pending_fan_out) do
+        %{suspended_branches: branches} when is_map(branches) and branches != %{} ->
+          completed_count =
+            case Map.get(strat, :pending_fan_out) do
+              %{completed_results: cr} -> map_size(cr)
+              _ -> 0
+            end
+
+          Map.merge(details, %{
+            reason: :fan_out_suspended,
+            suspended_branches:
+              Enum.map(branches, fn {name, %{suspension: s}} ->
+                %{branch: name, suspension_id: s.id, reason: s.reason}
+              end),
+            completed_count: completed_count,
+            total_branches: completed_count + map_size(branches)
           })
 
         _ ->
@@ -649,6 +685,19 @@ defmodule Jido.Composer.Workflow.Strategy do
 
         maybe_complete_fan_out(agent, new_directives)
 
+      {:suspend, %Suspension{} = suspension} ->
+        handle_fan_out_branch_suspend(agent, fan_out, branch_name, suspension, nil, strat)
+
+      {:suspend, %Suspension{} = suspension, partial_result} ->
+        handle_fan_out_branch_suspend(
+          agent,
+          fan_out,
+          branch_name,
+          suspension,
+          partial_result,
+          strat
+        )
+
       {:error, reason} ->
         case fan_out.on_error do
           :fail_fast ->
@@ -673,6 +722,29 @@ defmodule Jido.Composer.Workflow.Strategy do
     end
   end
 
+  defp handle_fan_out_branch_suspend(
+         agent,
+         fan_out,
+         branch_name,
+         suspension,
+         partial_result,
+         strat
+       ) do
+    pending = MapSet.delete(fan_out.pending_branches, branch_name)
+
+    suspended =
+      Map.put(fan_out.suspended_branches, branch_name, %{
+        suspension: suspension,
+        partial_result: partial_result
+      })
+
+    fan_out = %{fan_out | pending_branches: pending, suspended_branches: suspended}
+    {fan_out, new_directives} = dispatch_queued_branches(fan_out, strat)
+
+    agent = StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out} end)
+    maybe_complete_fan_out(agent, new_directives)
+  end
+
   defp dispatch_fan_out(agent, %FanOutNode{} = fan_out_node, strat) do
     fan_out_id = generate_fan_out_id()
     flat_context = Context.to_flat_map(strat.machine.context)
@@ -693,6 +765,7 @@ defmodule Jido.Composer.Workflow.Strategy do
       node: fan_out_node,
       pending_branches: dispatched_names,
       completed_results: %{},
+      suspended_branches: %{},
       queued_branches: to_queue,
       merge: fan_out_node.merge,
       on_error: fan_out_node.on_error
@@ -766,25 +839,94 @@ defmodule Jido.Composer.Workflow.Strategy do
     strat = StratState.get(agent)
     fan_out = strat.pending_fan_out
 
-    if MapSet.size(fan_out.pending_branches) == 0 and fan_out.queued_branches == [] do
-      merged = FanOutNode.merge_results(fan_out.completed_results, fan_out.merge)
-      machine = Machine.apply_result(strat.machine, merged)
+    cond do
+      # All done, no suspensions -> merge & transition
+      MapSet.size(fan_out.pending_branches) == 0 and
+        fan_out.queued_branches == [] and
+          fan_out.suspended_branches == %{} ->
+        merged = FanOutNode.merge_results(fan_out.completed_results, fan_out.merge)
+        machine = Machine.apply_result(strat.machine, merged)
 
-      agent = StratState.update(agent, fn s -> %{s | pending_fan_out: nil} end)
+        agent = StratState.update(agent, fn s -> %{s | pending_fan_out: nil} end)
 
-      case Machine.transition(machine, :ok) do
-        {:ok, machine} ->
-          agent = put_machine(agent, machine)
-          handle_after_transition(agent)
+        case Machine.transition(machine, :ok) do
+          {:ok, machine} ->
+            agent = put_machine(agent, machine)
+            handle_after_transition(agent)
 
-        {:error, _reason} ->
-          agent = put_machine(agent, machine)
-          agent = StratState.set_status(agent, :failure)
-          {agent, []}
-      end
-    else
-      {agent, extra_directives}
+          {:error, _reason} ->
+            agent = put_machine(agent, machine)
+            agent = StratState.set_status(agent, :failure)
+            {agent, []}
+        end
+
+      # All running done, suspensions remain -> emit Suspend directives
+      MapSet.size(fan_out.pending_branches) == 0 and
+        fan_out.queued_branches == [] and
+          fan_out.suspended_branches != %{} ->
+        suspend_directives =
+          Enum.map(fan_out.suspended_branches, fn {_branch_name, %{suspension: sus}} ->
+            %SuspendDirective{suspension: sus}
+          end)
+
+        agent = StratState.update(agent, fn s -> %{s | status: :waiting} end)
+        {agent, extra_directives ++ suspend_directives}
+
+      # Still running -> pass through
+      true ->
+        {agent, extra_directives}
     end
+  end
+
+  defp has_suspended_fan_out_branch?(strat, suspension_id) do
+    case strat.pending_fan_out do
+      %{suspended_branches: branches} when is_map(branches) and branches != %{} ->
+        Enum.any?(branches, fn {_name, %{suspension: %Suspension{id: id}}} ->
+          id == suspension_id
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  defp find_suspended_fan_out_branch(fan_out, suspension_id) do
+    Enum.find(fan_out.suspended_branches, fn {_name, %{suspension: %Suspension{id: id}}} ->
+      id == suspension_id
+    end)
+  end
+
+  defp handle_fan_out_branch_resume(agent, strat, suspension_id, params) do
+    fan_out = strat.pending_fan_out
+    {branch_name, _branch_data} = find_suspended_fan_out_branch(fan_out, suspension_id)
+    outcome = params[:outcome] || :ok
+    data = params[:data] || %{}
+
+    result =
+      if outcome == :ok,
+        do: {:ok, data},
+        else: {:error, params[:error] || :suspension_failed}
+
+    complete_suspended_fan_out_branch(agent, fan_out, branch_name, result)
+  end
+
+  defp complete_suspended_fan_out_branch(agent, fan_out, branch_name, result) do
+    fan_out = %{
+      fan_out
+      | suspended_branches: Map.delete(fan_out.suspended_branches, branch_name)
+    }
+
+    agent =
+      StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out, status: :running} end)
+
+    strat = StratState.get(agent)
+    handle_fan_out_branch_result(agent, strat.pending_fan_out, branch_name, result, strat)
+  end
+
+  defp handle_fan_out_branch_timeout(agent, strat, suspension_id) do
+    fan_out = strat.pending_fan_out
+    {branch_name, _} = find_suspended_fan_out_branch(fan_out, suspension_id)
+    complete_suspended_fan_out_branch(agent, fan_out, branch_name, {:error, :suspension_timeout})
   end
 
   defp cancel_and_fail(agent, fan_out, _reason) do

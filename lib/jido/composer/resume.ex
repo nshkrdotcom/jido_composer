@@ -59,6 +59,11 @@ defmodule Jido.Composer.Resume do
         {resumed_agent, directives} = deliver_fn.(agent, signal)
         {:ok, resumed_agent, directives}
 
+      has_suspended_fan_out_branch?(strat, suspension_id) ->
+        signal = {:suspend_resume, Map.put(resume_data, :suspension_id, suspension_id)}
+        {resumed_agent, directives} = deliver_fn.(agent, signal)
+        {:ok, resumed_agent, directives}
+
       true ->
         {:error, :no_matching_suspension}
     end
@@ -68,6 +73,18 @@ defmodule Jido.Composer.Resume do
     case Map.get(strat, :suspended_calls, %{}) do
       calls when is_map(calls) -> Map.has_key?(calls, suspension_id)
       _ -> false
+    end
+  end
+
+  defp has_suspended_fan_out_branch?(strat, suspension_id) do
+    case Map.get(strat, :pending_fan_out) do
+      %{suspended_branches: branches} when is_map(branches) and branches != %{} ->
+        Enum.any?(branches, fn {_name, %{suspension: %Suspension{id: id}}} ->
+          id == suspension_id
+        end)
+
+      _ ->
+        false
     end
   end
 end

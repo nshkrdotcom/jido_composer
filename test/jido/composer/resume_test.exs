@@ -206,4 +206,66 @@ defmodule Jido.Composer.ResumeTest do
       assert {:error, :agent_not_available} = result
     end
   end
+
+  describe "resume with fan-out suspended branches" do
+    alias Jido.Composer.Suspension
+
+    test "delivers resume signal for fan-out suspended branch" do
+      agent = ResumeWorkflow.new()
+      {:ok, suspension} = Suspension.new(reason: :rate_limit, metadata: %{})
+
+      # Manually construct agent with pending_fan_out containing suspended_branches
+      agent =
+        StratState.update(agent, fn s ->
+          %{
+            s
+            | status: :waiting,
+              pending_fan_out: %{
+                id: "fan-out-test",
+                node: nil,
+                pending_branches: MapSet.new(),
+                completed_results: %{echo: %{echoed: "hi"}},
+                suspended_branches: %{
+                  add: %{suspension: suspension, partial_result: nil}
+                },
+                queued_branches: [],
+                merge: :deep_merge,
+                on_error: :collect_partial
+              }
+          }
+        end)
+
+      deliver_fn = fn agent_to_resume, signal ->
+        ResumeWorkflow.cmd(agent_to_resume, signal)
+      end
+
+      result =
+        Resume.resume(
+          agent,
+          suspension.id,
+          %{outcome: :ok, data: %{result: 3.0}},
+          deliver_fn: deliver_fn
+        )
+
+      assert {:ok, _resumed_agent, _directives} = result
+    end
+
+    test "returns :no_matching_suspension when fan_out cleared" do
+      agent = ResumeWorkflow.new()
+
+      deliver_fn = fn agent_to_resume, signal ->
+        ResumeWorkflow.cmd(agent_to_resume, signal)
+      end
+
+      result =
+        Resume.resume(
+          agent,
+          "nonexistent-suspension-id",
+          %{outcome: :ok},
+          deliver_fn: deliver_fn
+        )
+
+      assert {:error, :no_matching_suspension} = result
+    end
+  end
 end

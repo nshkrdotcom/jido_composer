@@ -9,14 +9,16 @@ emitting [directives](../glossary.md#directive) for all side effects.
 The strategy stores its state under `agent.state.__strategy__` with the
 following structure:
 
-| Field                | Type                    | Purpose                                                            |
-| -------------------- | ----------------------- | ------------------------------------------------------------------ |
-| `machine`            | `Machine.t()`           | The FSM being driven                                               |
-| `module`             | module                  | Strategy module reference                                          |
-| `pending_child`      | `nil \| {tag, node}`    | Tracks in-flight AgentNode execution                               |
-| `child_request_id`   | `nil \| String.t()`     | Correlation ID for child agent communication                       |
-| `pending_suspension` | `nil \| Suspension.t()` | Tracks any active [suspension](../hitl/README.md)                  |
-| `pending_fan_out`    | `nil \| fan_out_state`  | Tracks in-flight [FanOutNode](#execution-flow-fanoutnode) branches |
+| Field                | Type                     | Purpose                                                                                                            |
+| -------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `machine`            | `Machine.t()`            | The FSM being driven                                                                                               |
+| `module`             | module                   | Strategy module reference                                                                                          |
+| `pending_child`      | `nil \| {tag, node}`     | Tracks in-flight AgentNode execution                                                                               |
+| `child_request_id`   | `nil \| String.t()`      | Correlation ID for child agent communication                                                                       |
+| `pending_suspension` | `nil \| Suspension.t()`  | Tracks any active [suspension](../hitl/README.md)                                                                  |
+| `pending_fan_out`    | `nil \| fan_out_state`   | Tracks in-flight [FanOutNode](#execution-flow-fanoutnode) branches                                                 |
+| `children`           | `%{tag => ChildRef.t()}` | Serializable [child references](../hitl/persistence.md#childref-serializable-child-references) for checkpoint/thaw |
+| `child_phases`       | `%{tag => atom}`         | [Phase tracking](../hitl/persistence.md#handling-in-flight-operations) for resume replay                           |
 
 ## Lifecycle
 
@@ -57,17 +59,18 @@ sequenceDiagram
 
 The Workflow Strategy declares the following signal routes:
 
-| Signal Type                      | Target                                     | Purpose                         |
-| -------------------------------- | ------------------------------------------ | ------------------------------- |
-| `composer.workflow.start`        | `{:strategy_cmd, :workflow_start}`         | Begin workflow execution        |
-| `composer.workflow.child.result` | `{:strategy_cmd, :workflow_child_result}`  | Receive result from child agent |
-| `jido.agent.child.started`       | `{:strategy_cmd, :workflow_child_started}` | Child agent is ready            |
-| `jido.agent.child.exit`          | `{:strategy_cmd, :workflow_child_exit}`    | Child agent terminated          |
-| `composer.fan_out.branch_result` | `{:strategy_cmd, :fan_out_branch_result}`  | Result from a FanOut branch     |
-| `composer.suspend.resume`        | `{:strategy_cmd, :suspend_resume}`         | Resume from any suspension      |
-| `composer.suspend.timeout`       | `{:strategy_cmd, :suspend_timeout}`        | Suspension timeout fired        |
-| `composer.hitl.response`         | `{:strategy_cmd, :hitl_response}`          | Human decision (legacy alias)   |
-| `composer.hitl.timeout`          | `{:strategy_cmd, :hitl_timeout}`           | HITL timeout (legacy alias)     |
+| Signal Type                      | Target                                     | Purpose                                                                          |
+| -------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------- |
+| `composer.workflow.start`        | `{:strategy_cmd, :workflow_start}`         | Begin workflow execution                                                         |
+| `composer.workflow.child.result` | `{:strategy_cmd, :workflow_child_result}`  | Receive result from child agent                                                  |
+| `jido.agent.child.started`       | `{:strategy_cmd, :workflow_child_started}` | Child agent is ready                                                             |
+| `jido.agent.child.exit`          | `{:strategy_cmd, :workflow_child_exit}`    | Child agent terminated                                                           |
+| `composer.fan_out.branch_result` | `{:strategy_cmd, :fan_out_branch_result}`  | Result from a FanOut branch                                                      |
+| `composer.suspend.resume`        | `{:strategy_cmd, :suspend_resume}`         | Resume from any suspension                                                       |
+| `composer.suspend.timeout`       | `{:strategy_cmd, :suspend_timeout}`        | Suspension timeout fired                                                         |
+| `composer.hitl.response`         | `{:strategy_cmd, :hitl_response}`          | Human decision (legacy alias)                                                    |
+| `composer.hitl.timeout`          | `{:strategy_cmd, :hitl_timeout}`           | HITL timeout (legacy alias)                                                      |
+| `composer.child.hibernated`      | `{:strategy_cmd, :child_hibernated}`       | Child agent [checkpointed](../hitl/persistence.md#cascading-checkpoint-protocol) |
 
 ## Command Actions
 
@@ -91,16 +94,17 @@ completes, the runtime routes the result back as a `Jido.Instruction` struct
 
 The strategy pattern-matches on `instruction.action` to dispatch:
 
-| Action                    | Trigger                  | Behaviour                                                                            |
-| ------------------------- | ------------------------ | ------------------------------------------------------------------------------------ |
-| `:workflow_start`         | External signal          | Initialize machine context, dispatch first node                                      |
-| `:workflow_node_result`   | RunInstruction result    | Scope result under state name, extract outcome, apply transition, dispatch next node |
-| `:workflow_child_result`  | Child agent signal       | Same as node_result but for AgentNode results                                        |
-| `:workflow_child_started` | SpawnAgent confirmation  | Send context to child as signal                                                      |
-| `:workflow_child_exit`    | Child process terminated | Handle unexpected exit or cleanup                                                    |
-| `:fan_out_branch_result`  | FanOut branch completed  | Store branch result, check if all branches done, merge and transition                |
-| `:suspend_resume`         | Resume signal            | Validate suspension, merge resume data, transition with outcome                      |
-| `:suspend_timeout`        | Timeout fired            | Use timeout outcome for transition if suspension still pending                       |
+| Action                    | Trigger                  | Behaviour                                                                                                           |
+| ------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `:workflow_start`         | External signal          | Initialize machine context, dispatch first node                                                                     |
+| `:workflow_node_result`   | RunInstruction result    | Scope result under state name, extract outcome, apply transition, dispatch next node                                |
+| `:workflow_child_result`  | Child agent signal       | Same as node_result but for AgentNode results                                                                       |
+| `:workflow_child_started` | SpawnAgent confirmation  | Send context to child as signal                                                                                     |
+| `:workflow_child_exit`    | Child process terminated | Handle unexpected exit or cleanup                                                                                   |
+| `:fan_out_branch_result`  | FanOut branch completed  | Store branch result, check if all branches done, merge and transition                                               |
+| `:suspend_resume`         | Resume signal            | Validate suspension, merge resume data, transition with outcome                                                     |
+| `:suspend_timeout`        | Timeout fired            | Use timeout outcome for transition if suspension still pending                                                      |
+| `:child_hibernated`       | Child checkpointed       | Update [ChildRef](../hitl/persistence.md#childref-serializable-child-references) to `:paused`, store checkpoint key |
 
 ## Execution Flow: ActionNode
 

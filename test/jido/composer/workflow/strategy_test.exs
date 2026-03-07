@@ -1385,6 +1385,623 @@ defmodule Jido.Composer.Workflow.StrategyTest do
     end
   end
 
+  describe "FanOut branch suspension" do
+    alias Jido.Composer.Directive.FanOutBranch
+    alias Jido.Composer.Directive.Suspend, as: SuspendDirective
+    alias Jido.Composer.Node.{ActionNode, FanOutNode}
+    alias Jido.Composer.Suspension
+
+    defp init_fan_out_suspend_workflow(opts \\ []) do
+      {:ok, add_node} = ActionNode.new(Jido.Composer.TestActions.AddAction)
+      {:ok, echo_node} = ActionNode.new(Jido.Composer.TestActions.EchoAction)
+
+      fan_out_opts =
+        [name: "parallel", branches: [add: add_node, echo: echo_node]]
+        |> Keyword.merge(opts)
+
+      {:ok, fan_out} = FanOutNode.new(fan_out_opts)
+
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{compute: fan_out},
+          transitions: %{
+            {:compute, :ok} => :done,
+            {:compute, :error} => :failed,
+            {:_, :error} => :failed
+          },
+          initial: :compute
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_start,
+              params: %{value: 1.0, amount: 2.0, message: "hi"}
+            }
+          ],
+          ctx
+        )
+
+      {agent, directives, ctx}
+    end
+
+    defp make_suspension(attrs \\ []) do
+      defaults = [reason: :rate_limit, metadata: %{retry_after_ms: 5000}]
+      {:ok, sus} = Suspension.new(Keyword.merge(defaults, attrs))
+      sus
+    end
+
+    test "branch suspend moves to suspended_branches" do
+      {agent, _directives, ctx} = init_fan_out_suspend_workflow()
+      suspension = make_suspension()
+
+      {agent, _directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, suspension}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      fan_out = strat.pending_fan_out
+      refute MapSet.member?(fan_out.pending_branches, :add)
+      assert Map.has_key?(fan_out.suspended_branches, :add)
+      assert fan_out.suspended_branches[:add].suspension == suspension
+      assert fan_out.suspended_branches[:add].partial_result == nil
+    end
+
+    test "suspend with partial_result stores both" do
+      {agent, _directives, ctx} = init_fan_out_suspend_workflow()
+      suspension = make_suspension()
+      partial = %{processed: false}
+
+      {agent, _directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, suspension, partial}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      fan_out = strat.pending_fan_out
+      assert fan_out.suspended_branches[:add].suspension == suspension
+      assert fan_out.suspended_branches[:add].partial_result == partial
+    end
+
+    test "all running done + suspensions remain emits Suspend directives" do
+      {agent, _directives, ctx} = init_fan_out_suspend_workflow()
+      suspension = make_suspension()
+
+      # Branch :add suspends
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, suspension}}
+            }
+          ],
+          ctx
+        )
+
+      # Branch :echo completes
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:ok, %{echoed: "hi"}}}
+            }
+          ],
+          ctx
+        )
+
+      # Should emit a Suspend directive for the suspended branch
+      assert [%SuspendDirective{suspension: ^suspension}] = directives
+
+      strat = StratState.get(agent)
+      assert strat.status == :waiting
+      assert strat.pending_fan_out != nil
+    end
+
+    test "all branches suspend emits multiple Suspend directives" do
+      {agent, _directives, ctx} = init_fan_out_suspend_workflow()
+      sus1 = make_suspension()
+      sus2 = make_suspension()
+
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, sus1}}
+            }
+          ],
+          ctx
+        )
+
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:suspend, sus2}}
+            }
+          ],
+          ctx
+        )
+
+      assert length(directives) == 2
+      assert Enum.all?(directives, &match?(%SuspendDirective{}, &1))
+
+      strat = StratState.get(agent)
+      assert strat.status == :waiting
+    end
+
+    test "resume suspended fan-out branch completes workflow" do
+      {agent, _directives, ctx} = init_fan_out_suspend_workflow()
+      suspension = make_suspension()
+
+      # Branch :add suspends
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, suspension}}
+            }
+          ],
+          ctx
+        )
+
+      # Branch :echo completes
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:ok, %{echoed: "hi"}}}
+            }
+          ],
+          ctx
+        )
+
+      # Resume suspended branch
+      {agent, _directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_resume,
+              params: %{
+                suspension_id: suspension.id,
+                outcome: :ok,
+                data: %{result: 3.0}
+              }
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+      assert strat.pending_fan_out == nil
+      assert strat.machine.context.working[:compute][:add][:result] == 3.0
+      assert strat.machine.context.working[:compute][:echo][:echoed] == "hi"
+    end
+
+    test "all branches suspend then resume sequentially" do
+      {agent, _directives, ctx} = init_fan_out_suspend_workflow()
+      sus1 = make_suspension()
+      sus2 = make_suspension()
+
+      # Both suspend
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, sus1}}
+            }
+          ],
+          ctx
+        )
+
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:suspend, sus2}}
+            }
+          ],
+          ctx
+        )
+
+      # Resume first — still waiting for second
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_resume,
+              params: %{suspension_id: sus1.id, outcome: :ok, data: %{result: 3.0}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      assert strat.status == :waiting
+      assert strat.pending_fan_out != nil
+
+      # Resume second — workflow should complete
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_resume,
+              params: %{suspension_id: sus2.id, outcome: :ok, data: %{echoed: "hi"}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+      assert strat.pending_fan_out == nil
+    end
+
+    test "resume with mismatched suspension_id returns error" do
+      {agent, _directives, ctx} = init_fan_out_suspend_workflow()
+      suspension = make_suspension()
+
+      # Suspend :add
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, suspension}}
+            }
+          ],
+          ctx
+        )
+
+      # Complete :echo
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:ok, %{echoed: "hi"}}}
+            }
+          ],
+          ctx
+        )
+
+      # Resume with wrong id
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_resume,
+              params: %{suspension_id: "wrong-id", outcome: :ok}
+            }
+          ],
+          ctx
+        )
+
+      assert [%Directive.Error{error: %RuntimeError{message: msg}}] = directives
+      assert msg =~ "No pending suspension"
+
+      strat = StratState.get(agent)
+      assert strat.status == :waiting
+    end
+
+    test "timeout on suspended fan-out branch treated as error" do
+      {agent, _directives, ctx} = init_fan_out_suspend_workflow(on_error: :collect_partial)
+      suspension = make_suspension()
+
+      # Suspend :add
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, suspension}}
+            }
+          ],
+          ctx
+        )
+
+      # Complete :echo
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:ok, %{echoed: "hi"}}}
+            }
+          ],
+          ctx
+        )
+
+      # Timeout the suspended branch
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_timeout,
+              params: %{suspension_id: suspension.id}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+      assert strat.pending_fan_out == nil
+      # Timeout result stored as error
+      assert strat.machine.context.working[:compute][:add] == {:error, :suspension_timeout}
+      assert strat.machine.context.working[:compute][:echo][:echoed] == "hi"
+    end
+
+    test "fail-fast error while branch suspended cancels everything" do
+      {:ok, add_node} = ActionNode.new(Jido.Composer.TestActions.AddAction)
+      {:ok, echo_node} = ActionNode.new(Jido.Composer.TestActions.EchoAction)
+      {:ok, fail_node} = ActionNode.new(Jido.Composer.TestActions.FailAction)
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "three_branch",
+          branches: [add: add_node, echo: echo_node, fail: fail_node],
+          on_error: :fail_fast
+        )
+
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{compute: fan_out},
+          transitions: %{
+            {:compute, :ok} => :done,
+            {:compute, :error} => :failed,
+            {:_, :error} => :failed
+          },
+          initial: :compute
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_start,
+              params: %{value: 1.0, amount: 2.0, message: "hi"}
+            }
+          ],
+          ctx
+        )
+
+      suspension = make_suspension()
+
+      # Branch :add suspends
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, suspension}}
+            }
+          ],
+          ctx
+        )
+
+      # Branch :fail errors with fail_fast
+      {agent, _directives} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :fail, result: {:error, "boom"}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      assert strat.pending_fan_out == nil
+      assert strat.machine.status == :failed
+    end
+
+    test "collect_partial with error + suspension + success then resume" do
+      {:ok, add_node} = ActionNode.new(Jido.Composer.TestActions.AddAction)
+      {:ok, echo_node} = ActionNode.new(Jido.Composer.TestActions.EchoAction)
+      {:ok, fail_node} = ActionNode.new(Jido.Composer.TestActions.FailAction)
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "three_branch",
+          branches: [add: add_node, echo: echo_node, fail: fail_node],
+          on_error: :collect_partial
+        )
+
+      ctx = %{
+        agent_module: TestWorkflowAgent,
+        strategy_opts: [
+          nodes: %{compute: fan_out},
+          transitions: %{
+            {:compute, :ok} => :done,
+            {:compute, :error} => :failed,
+            {:_, :error} => :failed
+          },
+          initial: :compute
+        ]
+      }
+
+      agent = TestWorkflowAgent.new()
+      {agent, _} = Strategy.init(agent, ctx)
+
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :workflow_start,
+              params: %{value: 1.0, amount: 2.0, message: "hi"}
+            }
+          ],
+          ctx
+        )
+
+      suspension = make_suspension()
+
+      # :add suspends
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, suspension}}
+            }
+          ],
+          ctx
+        )
+
+      # :fail errors
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :fail, result: {:error, "intentional failure"}}
+            }
+          ],
+          ctx
+        )
+
+      # :echo completes
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:ok, %{echoed: "hi"}}}
+            }
+          ],
+          ctx
+        )
+
+      # Should be waiting — :add still suspended
+      strat = StratState.get(agent)
+      assert strat.status == :waiting
+
+      # Resume :add
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :suspend_resume,
+              params: %{suspension_id: suspension.id, outcome: :ok, data: %{result: 3.0}}
+            }
+          ],
+          ctx
+        )
+
+      strat = StratState.get(agent)
+      assert strat.machine.status == :done
+      assert strat.machine.context.working[:compute][:add][:result] == 3.0
+      assert strat.machine.context.working[:compute][:echo][:echoed] == "hi"
+      assert strat.machine.context.working[:compute][:fail] == {:error, "intentional failure"}
+    end
+
+    test "snapshot includes fan-out suspension details" do
+      {agent, _directives, ctx} = init_fan_out_suspend_workflow()
+      suspension = make_suspension()
+
+      # Suspend :add
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :add, result: {:suspend, suspension}}
+            }
+          ],
+          ctx
+        )
+
+      # Complete :echo
+      {agent, _} =
+        Strategy.cmd(
+          agent,
+          [
+            %Jido.Instruction{
+              action: :fan_out_branch_result,
+              params: %{branch_name: :echo, result: {:ok, %{echoed: "hi"}}}
+            }
+          ],
+          ctx
+        )
+
+      snapshot = Strategy.snapshot(agent, ctx)
+      assert snapshot.status == :waiting
+      assert snapshot.details.reason == :fan_out_suspended
+      assert is_list(snapshot.details.suspended_branches)
+      assert length(snapshot.details.suspended_branches) == 1
+
+      [branch_info] = snapshot.details.suspended_branches
+      assert branch_info.branch == :add
+      assert branch_info.suspension_id == suspension.id
+      assert branch_info.reason == :rate_limit
+      assert snapshot.details.completed_count == 1
+      assert snapshot.details.total_branches == 2
+    end
+  end
+
   describe "checkpoint readiness" do
     test "prepare_for_checkpoint strips closures from live strategy state" do
       alias Jido.Composer.Checkpoint
