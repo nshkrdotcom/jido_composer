@@ -60,25 +60,28 @@ defmodule Jido.Composer.Resume do
   defp deliver_resume(agent, suspension_id, resume_data, deliver_fn) do
     strat = StratState.get(agent)
 
+    # When the agent was restored from checkpoint, replay in-flight operations
+    replay = replay_directives_if_thawed(strat)
+
     # Check if there's a matching suspension
     cond do
       match?(%Suspension{id: ^suspension_id}, Map.get(strat, :pending_suspension)) ->
         signal = {:suspend_resume, Map.put(resume_data, :suspension_id, suspension_id)}
         {resumed_agent, directives} = deliver_fn.(agent, signal)
         child_directives = child_respawn_directives(resumed_agent)
-        {:ok, resumed_agent, directives ++ child_directives}
+        {:ok, resumed_agent, replay ++ directives ++ child_directives}
 
       has_suspended_call?(strat, suspension_id) ->
         signal = {:suspend_resume, Map.put(resume_data, :suspension_id, suspension_id)}
         {resumed_agent, directives} = deliver_fn.(agent, signal)
         child_directives = child_respawn_directives(resumed_agent)
-        {:ok, resumed_agent, directives ++ child_directives}
+        {:ok, resumed_agent, replay ++ directives ++ child_directives}
 
       has_suspended_fan_out_branch?(strat, suspension_id) ->
         signal = {:suspend_resume, Map.put(resume_data, :suspension_id, suspension_id)}
         {resumed_agent, directives} = deliver_fn.(agent, signal)
         child_directives = child_respawn_directives(resumed_agent)
-        {:ok, resumed_agent, directives ++ child_directives}
+        {:ok, resumed_agent, replay ++ directives ++ child_directives}
 
       true ->
         {:error, :no_matching_suspension}
@@ -98,6 +101,14 @@ defmodule Jido.Composer.Resume do
     case Map.get(strat, :suspended_calls, %{}) do
       calls when is_map(calls) -> Map.has_key?(calls, suspension_id)
       _ -> false
+    end
+  end
+
+  defp replay_directives_if_thawed(strat) do
+    if Map.has_key?(strat, :checkpoint_status) do
+      Checkpoint.replay_directives(strat)
+    else
+      []
     end
   end
 

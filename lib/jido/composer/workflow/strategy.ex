@@ -52,6 +52,7 @@ defmodule Jido.Composer.Workflow.Strategy do
         fork_fns: opts[:fork_fns] || %{},
         children: %{},
         child_phases: %{},
+        hibernate_after: opts[:hibernate_after],
         agent_id: agent.id,
         agent_module: ctx[:agent_module]
       })
@@ -122,7 +123,8 @@ defmodule Jido.Composer.Workflow.Strategy do
         agent_module: params[:agent_module],
         agent_id: params[:agent_id],
         tag: tag,
-        status: :running
+        status: :running,
+        phase: :awaiting_result
       )
 
     agent =
@@ -144,7 +146,17 @@ defmodule Jido.Composer.Workflow.Strategy do
 
     agent =
       StratState.update(agent, fn s ->
-        %{s | child_phases: Map.delete(Map.get(s, :child_phases, %{}), tag)}
+        new_children =
+          case Map.get(s.children, tag) do
+            nil -> s.children
+            ref -> Map.put(s.children, tag, %{ref | phase: nil})
+          end
+
+        %{
+          s
+          | children: new_children,
+            child_phases: Map.delete(Map.get(s, :child_phases, %{}), tag)
+        }
       end)
 
     case params do
@@ -610,7 +622,8 @@ defmodule Jido.Composer.Workflow.Strategy do
       end)
 
     directive = %SuspendDirective{suspension: suspension}
-    {agent, [directive]}
+    directives = Checkpoint.maybe_add_checkpoint_and_stop([directive], StratState.get(agent))
+    {agent, directives}
   end
 
   defp handle_hitl_resume(agent, suspension, params) do
@@ -941,7 +954,12 @@ defmodule Jido.Composer.Workflow.Strategy do
           end)
 
         agent = StratState.update(agent, fn s -> %{s | status: :waiting} end)
-        {agent, extra_directives ++ suspend_directives}
+        all_directives = extra_directives ++ suspend_directives
+
+        all_directives =
+          Checkpoint.maybe_add_checkpoint_and_stop(all_directives, StratState.get(agent))
+
+        {agent, all_directives}
 
       # Still running -> pass through
       true ->

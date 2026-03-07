@@ -72,7 +72,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         rejection_policy: opts[:rejection_policy] || :continue_siblings,
         gated_calls: %{},
         suspended_calls: %{},
-        children: %{}
+        children: %{},
+        child_phases: %{},
+        hibernate_after: opts[:hibernate_after]
       })
 
     {agent, []}
@@ -185,12 +187,17 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         agent_module: params[:agent_module],
         agent_id: params[:agent_id],
         tag: tag,
-        status: :running
+        status: :running,
+        phase: :awaiting_result
       )
 
     agent =
       StratState.update(agent, fn s ->
-        %{s | children: Map.put(s.children, tag, child_ref)}
+        %{
+          s
+          | children: Map.put(s.children, tag, child_ref),
+            child_phases: Map.put(s.child_phases, tag, :awaiting_result)
+        }
       end)
 
     {agent, []}
@@ -229,11 +236,19 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         new_completed = s.completed_tool_results ++ [tool_result]
         new_context = Context.apply_result(s.context, scope_key, scoped_result)
 
+        new_children =
+          case Map.get(s.children, tag) do
+            nil -> s.children
+            ref -> Map.put(s.children, tag, %{ref | phase: nil})
+          end
+
         %{
           s
           | pending_tool_calls: new_pending,
             completed_tool_results: new_completed,
-            context: new_context
+            context: new_context,
+            children: new_children,
+            child_phases: Map.delete(s.child_phases, tag)
         }
       end)
 
@@ -618,6 +633,21 @@ defmodule Jido.Composer.Orchestrator.Strategy do
               build_tool_directive(call, state.nodes, state.context)
             end)
 
+          # Track spawning phase for AgentNode tool calls
+          spawn_phases =
+            ungated_directives
+            |> Enum.filter(&match?(%Directive.SpawnAgent{}, &1))
+            |> Map.new(fn %Directive.SpawnAgent{tag: tag} -> {tag, :spawning} end)
+
+          agent =
+            if spawn_phases != %{} do
+              StratState.update(agent, fn s ->
+                %{s | child_phases: Map.merge(s.child_phases, spawn_phases)}
+              end)
+            else
+              agent
+            end
+
           # Build SuspendForHuman directives for gated calls
           gated_directives =
             Enum.reduce(gated_entries, [], fn {_req_id, %{request: request}}, acc ->
@@ -843,9 +873,14 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
         if state.pending_tool_calls == [] and state.gated_calls == %{} do
           agent = StratState.update(agent, fn s -> %{s | status: :awaiting_suspension} end)
-          {agent, [directive]}
+
+          directives =
+            Checkpoint.maybe_add_checkpoint_and_stop([directive], StratState.get(agent))
+
+          {agent, directives}
         else
-          {agent, [directive]}
+          directives = Checkpoint.maybe_add_checkpoint_and_stop([directive], state)
+          {agent, directives}
         end
 
       {:error, reason} ->

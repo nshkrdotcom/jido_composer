@@ -12,9 +12,18 @@ defmodule Jido.Composer.ChildRef do
 
   @derive Jason.Encoder
 
-  defstruct [:agent_module, :agent_id, :tag, :checkpoint_key, :suspension_id, status: :running]
+  defstruct [
+    :agent_module,
+    :agent_id,
+    :tag,
+    :checkpoint_key,
+    :suspension_id,
+    :phase,
+    status: :running
+  ]
 
   @type status :: :running | :paused | :hibernated | :completed | :failed
+  @type phase :: :spawning | :awaiting_result | nil
 
   @type t :: %__MODULE__{
           agent_module: module(),
@@ -22,6 +31,7 @@ defmodule Jido.Composer.ChildRef do
           tag: term(),
           checkpoint_key: term(),
           suspension_id: String.t() | nil,
+          phase: phase(),
           status: status()
         }
 
@@ -33,6 +43,7 @@ defmodule Jido.Composer.ChildRef do
       tag: Keyword.fetch!(attrs, :tag),
       checkpoint_key: Keyword.get(attrs, :checkpoint_key),
       suspension_id: Keyword.get(attrs, :suspension_id),
+      phase: Keyword.get(attrs, :phase),
       status: Keyword.get(attrs, :status, :running)
     }
   end

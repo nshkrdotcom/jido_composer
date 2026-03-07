@@ -367,6 +367,196 @@ defmodule Jido.Composer.ResumeTest do
     end
   end
 
+  describe "resume prepends replay directives for thawed agents" do
+    alias Jido.Composer.ChildRef
+
+    test "includes replay directives when agent has checkpoint_status" do
+      agent = ResumeWorkflow.new()
+      {suspended_agent, _directives} = run_to_suspend(agent)
+
+      strat = StratState.get(suspended_agent)
+      suspension = strat.pending_suspension
+
+      # Add checkpoint_status and a child in :spawning phase to trigger replay
+      spawning_child = %ChildRef{
+        agent_module: SomeReplayModule,
+        agent_id: "child-replay-001",
+        tag: :replayer,
+        status: :running
+      }
+
+      suspended_agent =
+        StratState.update(suspended_agent, fn s ->
+          s
+          |> Map.put(:checkpoint_status, :hibernated)
+          |> Map.put(:child_phases, %{replayer: :spawning})
+          |> Map.put(:children, Map.put(s.children, :replayer, spawning_child))
+        end)
+
+      deliver_fn = fn agent_to_resume, signal ->
+        ResumeWorkflow.cmd(agent_to_resume, signal)
+      end
+
+      {:ok, _resumed_agent, directives} =
+        Resume.resume(
+          suspended_agent,
+          suspension.id,
+          %{
+            decision: :approved,
+            request_id: suspension.approval_request.id
+          },
+          deliver_fn: deliver_fn
+        )
+
+      # Replay directives should be first
+      [first | _rest] = directives
+      assert %Jido.Agent.Directive.SpawnAgent{} = first
+      assert first.agent == SomeReplayModule
+      assert first.tag == :replayer
+    end
+
+    test "replay directives come before deliver_fn directives" do
+      agent = ResumeWorkflow.new()
+      {suspended_agent, _directives} = run_to_suspend(agent)
+
+      strat = StratState.get(suspended_agent)
+      suspension = strat.pending_suspension
+
+      # Add checkpoint_status and a child in :spawning phase
+      spawning_child = %ChildRef{
+        agent_module: ReplayFirst,
+        agent_id: "child-order-001",
+        tag: :order_check,
+        status: :running
+      }
+
+      suspended_agent =
+        StratState.update(suspended_agent, fn s ->
+          s
+          |> Map.put(:checkpoint_status, :hibernated)
+          |> Map.put(:child_phases, %{order_check: :spawning})
+          |> Map.put(:children, Map.put(s.children, :order_check, spawning_child))
+        end)
+
+      # Track what deliver_fn returns so we can verify ordering
+      deliver_fn = fn agent_to_resume, signal ->
+        {agent_out, deliver_directives} = ResumeWorkflow.cmd(agent_to_resume, signal)
+        {agent_out, deliver_directives}
+      end
+
+      {:ok, _resumed_agent, directives} =
+        Resume.resume(
+          suspended_agent,
+          suspension.id,
+          %{
+            decision: :approved,
+            request_id: suspension.approval_request.id
+          },
+          deliver_fn: deliver_fn
+        )
+
+      # The first directive should be the replay SpawnAgent, not a deliver_fn directive
+      [first | _] = directives
+      assert %Jido.Agent.Directive.SpawnAgent{tag: :order_check} = first
+    end
+
+    test "no replay directives for live agent without checkpoint_status" do
+      agent = ResumeWorkflow.new()
+      {suspended_agent, _directives} = run_to_suspend(agent)
+
+      strat = StratState.get(suspended_agent)
+      suspension = strat.pending_suspension
+
+      # Verify no checkpoint_status is present on a live agent
+      refute Map.has_key?(strat, :checkpoint_status)
+
+      deliver_fn = fn agent_to_resume, signal ->
+        ResumeWorkflow.cmd(agent_to_resume, signal)
+      end
+
+      {:ok, _resumed_agent, directives} =
+        Resume.resume(
+          suspended_agent,
+          suspension.id,
+          %{
+            decision: :approved,
+            request_id: suspension.approval_request.id
+          },
+          deliver_fn: deliver_fn
+        )
+
+      # No SpawnAgent directives from replay (live agent, never checkpointed)
+      spawn_directives =
+        Enum.filter(directives, fn d ->
+          match?(%Jido.Agent.Directive.SpawnAgent{}, d)
+        end)
+
+      assert spawn_directives == []
+    end
+
+    test "replay directives via thaw_fn round-trip" do
+      agent = ResumeWorkflow.new()
+      {suspended_agent, _directives} = run_to_suspend(agent)
+
+      strat = StratState.get(suspended_agent)
+      suspension = strat.pending_suspension
+
+      # Add a child in :spawning phase before checkpointing
+      spawning_child = %ChildRef{
+        agent_module: ThawReplayModule,
+        agent_id: "child-thaw-001",
+        tag: :thaw_worker,
+        status: :running
+      }
+
+      suspended_agent =
+        StratState.update(suspended_agent, fn s ->
+          s
+          |> Map.put(:child_phases, %{thaw_worker: :spawning})
+          |> Map.put(:children, Map.put(s.children, :thaw_worker, spawning_child))
+        end)
+
+      # Checkpoint the agent (this adds checkpoint_status: :hibernated)
+      updated_strat = StratState.get(suspended_agent)
+      checkpoint_data = Checkpoint.prepare_for_checkpoint(updated_strat)
+      binary = :erlang.term_to_binary(checkpoint_data, [:compressed])
+
+      # Thaw from binary
+      thaw_fn = fn _agent_id ->
+        restored_strat = :erlang.binary_to_term(binary)
+        fresh_agent = ResumeWorkflow.new()
+        {:ok, StratState.put(fresh_agent, restored_strat)}
+      end
+
+      deliver_fn = fn agent_to_resume, signal ->
+        ResumeWorkflow.cmd(agent_to_resume, signal)
+      end
+
+      {:ok, _resumed_agent, directives} =
+        Resume.resume(
+          nil,
+          suspension.id,
+          %{
+            decision: :approved,
+            request_id: suspension.approval_request.id
+          },
+          thaw_fn: thaw_fn,
+          deliver_fn: deliver_fn,
+          agent_id: agent.id
+        )
+
+      # Replay directive should be present from the thawed checkpoint
+      replay_spawns =
+        Enum.filter(directives, fn d ->
+          match?(%Jido.Agent.Directive.SpawnAgent{tag: :thaw_worker}, d)
+        end)
+
+      assert length(replay_spawns) == 1
+      [spawn] = replay_spawns
+      assert spawn.agent == ThawReplayModule
+    end
+  end
+
   describe "resume includes child respawn directives" do
     alias Jido.Composer.ChildRef
 
