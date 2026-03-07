@@ -29,6 +29,17 @@ defmodule Jido.Composer.Workflow.Strategy do
   @impl true
   def init(agent, ctx) do
     opts = ctx.strategy_opts
+    existing = StratState.get(agent, %{})
+
+    if Map.get(existing, :module) == __MODULE__ and Map.get(existing, :status) != :idle do
+      # Restored agent — keep checkpoint state, no rebuild needed
+      {agent, []}
+    else
+      fresh_init(agent, ctx, opts)
+    end
+  end
+
+  defp fresh_init(agent, ctx, opts) do
     nodes = build_nodes(opts[:nodes])
 
     machine =

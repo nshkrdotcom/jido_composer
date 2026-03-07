@@ -1,0 +1,283 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2026-03-07T14:11:21.439685Z",
+      "request": {
+        "body_json": {
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "content": "Check rate limits with 0 tokens remaining. Call rate_limit_action with tokens set to 0.",
+              "role": "user"
+            }
+          ],
+          "model": "claude-sonnet-4-20250514",
+          "stream": false,
+          "system": "You are a test assistant. When asked to check rate limits, call rate_limit_action with the tokens value specified. When asked to echo, use the echo tool.",
+          "tools": [
+            {
+              "description": "Echoes input params as the result",
+              "input_schema": {
+                "properties": {
+                  "message": {
+                    "description": "Message to echo",
+                    "type": "string"
+                  }
+                },
+                "required": ["message"],
+                "type": "object"
+              },
+              "name": "echo"
+            },
+            {
+              "description": "Simulates a rate-limited operation that suspends",
+              "input_schema": {
+                "properties": {
+                  "tokens": {
+                    "description": "Tokens remaining",
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "name": "rate_limit_action"
+            }
+          ]
+        },
+        "body_type": "json",
+        "headers": {
+          "accept-encoding": ["gzip"],
+          "anthropic-beta": ["tools-2024-05-16"],
+          "anthropic-version": ["2023-06-01"],
+          "content-type": ["application/json"],
+          "user-agent": ["req/0.5.17"]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://api.anthropic.com/v1/messages"
+      },
+      "response": {
+        "body_json": {
+          "content": [
+            {
+              "text": "I'll check the rate limits with 0 tokens remaining as requested.",
+              "type": "text"
+            },
+            {
+              "caller": {
+                "type": "direct"
+              },
+              "id": "toolu_01KgFq7cWLdA5BvfqHxZ4cHk",
+              "input": {
+                "tokens": 0
+              },
+              "name": "rate_limit_action",
+              "type": "tool_use"
+            }
+          ],
+          "id": "msg_01RxHyPNjm4iLU4diT9ZaLe7",
+          "model": "claude-sonnet-4-20250514",
+          "role": "assistant",
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "not_available",
+            "input_tokens": 508,
+            "output_tokens": 71,
+            "service_tier": "standard"
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "anthropic-organization-id": ["a8b30265-cdb3-4bc6-8798-158fb659a7f5"],
+          "anthropic-ratelimit-input-tokens-limit": ["2000000"],
+          "anthropic-ratelimit-input-tokens-remaining": ["2000000"],
+          "anthropic-ratelimit-input-tokens-reset": ["2026-03-07T14:11:20Z"],
+          "anthropic-ratelimit-output-tokens-limit": ["400000"],
+          "anthropic-ratelimit-output-tokens-remaining": ["400000"],
+          "anthropic-ratelimit-output-tokens-reset": ["2026-03-07T14:11:21Z"],
+          "anthropic-ratelimit-requests-limit": ["4000"],
+          "anthropic-ratelimit-requests-remaining": ["3999"],
+          "anthropic-ratelimit-requests-reset": ["2026-03-07T14:11:19Z"],
+          "anthropic-ratelimit-tokens-limit": ["2400000"],
+          "anthropic-ratelimit-tokens-remaining": ["2400000"],
+          "anthropic-ratelimit-tokens-reset": ["2026-03-07T14:11:20Z"],
+          "cf-cache-status": ["DYNAMIC"],
+          "cf-ray": ["9d8a304a5a0b82ee-GIG"],
+          "connection": ["keep-alive"],
+          "content-security-policy": [
+            "default-src 'none'; frame-ancestors 'none'"
+          ],
+          "content-type": ["application/json"],
+          "date": ["Sat, 07 Mar 2026 14:11:21 GMT"],
+          "request-id": ["req_011CYorYuUiiBpyQcJ5MVKSZ"],
+          "server": ["cloudflare"],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubDomains; preload"
+          ],
+          "transfer-encoding": ["chunked"],
+          "vary": ["Accept-Encoding"],
+          "x-envoy-upstream-service-time": ["2534"],
+          "x-robots-tag": ["none"]
+        },
+        "status": 200
+      }
+    },
+    {
+      "recorded_at": "2026-03-07T14:11:23.205781Z",
+      "request": {
+        "body_json": {
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "content": "Check rate limits with 0 tokens remaining. Call rate_limit_action with tokens set to 0.",
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "text": "I'll check the rate limits with 0 tokens remaining as requested.",
+                  "type": "text"
+                },
+                {
+                  "id": "toolu_01KgFq7cWLdA5BvfqHxZ4cHk",
+                  "input": {
+                    "tokens": 0
+                  },
+                  "name": "rate_limit_action",
+                  "type": "tool_use"
+                }
+              ],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "content": "{\"tokens_refilled\":true}",
+                  "tool_use_id": "toolu_01KgFq7cWLdA5BvfqHxZ4cHk",
+                  "type": "tool_result"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "claude-sonnet-4-20250514",
+          "stream": false,
+          "system": "You are a test assistant. When asked to check rate limits, call rate_limit_action with the tokens value specified. When asked to echo, use the echo tool.",
+          "tools": [
+            {
+              "description": "Echoes input params as the result",
+              "input_schema": {
+                "properties": {
+                  "message": {
+                    "description": "Message to echo",
+                    "type": "string"
+                  }
+                },
+                "required": ["message"],
+                "type": "object"
+              },
+              "name": "echo"
+            },
+            {
+              "description": "Simulates a rate-limited operation that suspends",
+              "input_schema": {
+                "properties": {
+                  "tokens": {
+                    "description": "Tokens remaining",
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "name": "rate_limit_action"
+            }
+          ]
+        },
+        "body_type": "json",
+        "headers": {
+          "accept-encoding": ["gzip"],
+          "anthropic-beta": ["tools-2024-05-16"],
+          "anthropic-version": ["2023-06-01"],
+          "content-type": ["application/json"],
+          "user-agent": ["req/0.5.17"]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://api.anthropic.com/v1/messages"
+      },
+      "response": {
+        "body_json": {
+          "content": [
+            {
+              "text": "The rate limit action has been executed with 0 tokens remaining. The result shows that tokens have been refilled (tokens_refilled: true), indicating that the rate limiting system has reset or replenished the available tokens.",
+              "type": "text"
+            }
+          ],
+          "id": "msg_01MjXMGfHm5cJ37zPqSAhq4D",
+          "model": "claude-sonnet-4-20250514",
+          "role": "assistant",
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "not_available",
+            "input_tokens": 598,
+            "output_tokens": 50,
+            "service_tier": "standard"
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "anthropic-organization-id": ["a8b30265-cdb3-4bc6-8798-158fb659a7f5"],
+          "anthropic-ratelimit-input-tokens-limit": ["2000000"],
+          "anthropic-ratelimit-input-tokens-remaining": ["2000000"],
+          "anthropic-ratelimit-input-tokens-reset": ["2026-03-07T14:11:22Z"],
+          "anthropic-ratelimit-output-tokens-limit": ["400000"],
+          "anthropic-ratelimit-output-tokens-remaining": ["400000"],
+          "anthropic-ratelimit-output-tokens-reset": ["2026-03-07T14:11:23Z"],
+          "anthropic-ratelimit-requests-limit": ["4000"],
+          "anthropic-ratelimit-requests-remaining": ["3999"],
+          "anthropic-ratelimit-requests-reset": ["2026-03-07T14:11:21Z"],
+          "anthropic-ratelimit-tokens-limit": ["2400000"],
+          "anthropic-ratelimit-tokens-remaining": ["2400000"],
+          "anthropic-ratelimit-tokens-reset": ["2026-03-07T14:11:22Z"],
+          "cf-cache-status": ["DYNAMIC"],
+          "cf-ray": ["9d8a305b7c3782ee-GIG"],
+          "connection": ["keep-alive"],
+          "content-security-policy": [
+            "default-src 'none'; frame-ancestors 'none'"
+          ],
+          "content-type": ["application/json"],
+          "date": ["Sat, 07 Mar 2026 14:11:23 GMT"],
+          "request-id": ["req_011CYorZ7Cfd8HNrTVu2M7ed"],
+          "server": ["cloudflare"],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubDomains; preload"
+          ],
+          "transfer-encoding": ["chunked"],
+          "vary": ["Accept-Encoding"],
+          "x-envoy-upstream-service-time": ["1565"],
+          "x-robots-tag": ["none"]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "version": "2.0"
+}

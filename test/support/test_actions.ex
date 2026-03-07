@@ -234,4 +234,27 @@ defmodule Jido.Composer.TestActions do
       end
     end
   end
+
+  defmodule TimedSuspendAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "timed_suspend_action",
+      description: "Suspends with a finite timeout for CheckpointAndStop testing",
+      schema: [
+        timeout_ms: [type: :integer, required: false, doc: "Suspension timeout in ms"]
+      ]
+
+    def run(params, _context) do
+      timeout_ms = Map.get(params, :timeout_ms, 30_000)
+
+      {:ok, suspension} =
+        Jido.Composer.Suspension.new(
+          reason: :async_completion,
+          timeout: timeout_ms,
+          metadata: %{operation: "timed_suspend"}
+        )
+
+      {:ok, %{suspended: true, __suspension__: suspension}, :suspend}
+    end
+  end
 end

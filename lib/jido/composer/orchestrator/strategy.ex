@@ -29,7 +29,39 @@ defmodule Jido.Composer.Orchestrator.Strategy do
   @impl true
   def init(agent, ctx) do
     opts = ctx.strategy_opts
+    existing = StratState.get(agent, %{})
 
+    if Map.get(existing, :module) == __MODULE__ and Map.get(existing, :status) != :idle do
+      restore_runtime_fields(agent, existing, opts)
+    else
+      fresh_init(agent, opts)
+    end
+  end
+
+  defp restore_runtime_fields(agent, existing, opts) do
+    node_modules = opts[:nodes] || []
+    nodes = build_nodes(node_modules)
+    tools = Enum.map(nodes, fn {_name, node} -> AgentTool.to_tool(node) end)
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+    name_atoms = Map.new(nodes, fn {name, _node} -> {name, String.to_atom(name)} end)
+
+    gated_node_names = MapSet.new(opts[:gated_nodes] || [])
+    approval_policy = opts[:approval_policy]
+
+    restored =
+      existing
+      |> Map.put(:nodes, nodes)
+      |> Map.put(:tools, tools)
+      |> Map.put(:name_atoms, name_atoms)
+      |> Map.put(:gated_node_names, gated_node_names)
+      |> Map.put(:approval_policy, approval_policy)
+      |> Map.put(:req_options, opts[:req_options] || existing[:req_options] || [])
+
+    agent = StratState.put(agent, restored)
+    {agent, []}
+  end
+
+  defp fresh_init(agent, opts) do
     node_modules = opts[:nodes] || []
     nodes = build_nodes(node_modules)
     tools = Enum.map(nodes, fn {_name, node} -> AgentTool.to_tool(node) end)
@@ -132,39 +164,44 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         handle_tool_suspension(agent, call_id, tool_name, params)
 
       status when status in [:ok, :error] ->
-        tool_result =
-          case status do
-            :ok ->
-              AgentTool.to_tool_result(call_id, tool_name, {:ok, params[:result]})
+        # Check if tool signaled suspension via effects (runtime DirectiveExec path)
+        if status == :ok and :suspend in List.wrap(params[:effects]) do
+          handle_tool_suspension(agent, call_id, tool_name, params)
+        else
+          tool_result =
+            case status do
+              :ok ->
+                AgentTool.to_tool_result(call_id, tool_name, {:ok, params[:result]})
 
-            :error ->
-              AgentTool.to_tool_result(call_id, tool_name, {:error, params[:result]})
-          end
+              :error ->
+                AgentTool.to_tool_result(call_id, tool_name, {:error, params[:result]})
+            end
 
-        # Scope result under tool name in context (only on success)
-        scope_key = scope_atom(agent, tool_name)
+          # Scope result under tool name in context (only on success)
+          scope_key = scope_atom(agent, tool_name)
 
-        scoped_result =
-          case status do
-            :ok -> params[:result] || %{}
-            :error -> %{error: inspect(params[:result])}
-          end
+          scoped_result =
+            case status do
+              :ok -> params[:result] || %{}
+              :error -> %{error: inspect(params[:result])}
+            end
 
-        agent =
-          StratState.update(agent, fn s ->
-            new_pending = List.delete(s.pending_tool_calls, call_id)
-            new_completed = s.completed_tool_results ++ [tool_result]
-            new_context = Context.apply_result(s.context, scope_key, scoped_result)
+          agent =
+            StratState.update(agent, fn s ->
+              new_pending = List.delete(s.pending_tool_calls, call_id)
+              new_completed = s.completed_tool_results ++ [tool_result]
+              new_context = Context.apply_result(s.context, scope_key, scoped_result)
 
-            %{
-              s
-              | pending_tool_calls: new_pending,
-                completed_tool_results: new_completed,
-                context: new_context
-            }
-          end)
+              %{
+                s
+                | pending_tool_calls: new_pending,
+                  completed_tool_results: new_completed,
+                  context: new_context
+              }
+            end)
 
-        check_all_tools_done(agent)
+          check_all_tools_done(agent)
+        end
 
       other ->
         {agent,
@@ -844,15 +881,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
   end
 
   defp handle_tool_suspension(agent, call_id, tool_name, params) do
-    reason = params[:reason] || :custom
-    suspension_meta = params[:suspension_metadata] || %{}
-
-    case Suspension.new(
-           reason: reason,
-           timeout: Map.get(suspension_meta, :timeout, :infinity),
-           resume_signal: "composer.suspend.resume",
-           metadata: Map.merge(suspension_meta, %{tool_call_id: call_id, tool_name: tool_name})
-         ) do
+    case extract_or_build_suspension(call_id, tool_name, params) do
       {:ok, suspension} ->
         call = %{id: call_id, name: tool_name, arguments: params[:arguments] || %{}}
 
@@ -969,6 +998,39 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         raise ArgumentError,
               "unknown tool name #{inspect(tool_name)}, " <>
                 "expected one of: #{inspect(Map.keys(strat.name_atoms))}"
+    end
+  end
+
+  # Extract an embedded Suspension from the tool result (runtime DirectiveExec path),
+  # or build a new one from explicit params (strategy-level test path).
+  defp extract_or_build_suspension(call_id, tool_name, params) do
+    result = params[:result]
+
+    embedded =
+      case result do
+        %{__suspension__: %Suspension{} = s} -> s
+        _ -> nil
+      end
+
+    if embedded do
+      # Enrich the embedded suspension with tool call metadata
+      enriched = %{
+        embedded
+        | resume_signal: embedded.resume_signal || "composer.suspend.resume",
+          metadata: Map.merge(embedded.metadata, %{tool_call_id: call_id, tool_name: tool_name})
+      }
+
+      {:ok, enriched}
+    else
+      reason = params[:reason] || :custom
+      suspension_meta = params[:suspension_metadata] || %{}
+
+      Suspension.new(
+        reason: reason,
+        timeout: Map.get(suspension_meta, :timeout, :infinity),
+        resume_signal: "composer.suspend.resume",
+        metadata: Map.merge(suspension_meta, %{tool_call_id: call_id, tool_name: tool_name})
+      )
     end
   end
 
