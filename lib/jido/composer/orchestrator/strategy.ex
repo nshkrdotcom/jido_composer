@@ -56,6 +56,10 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       |> Map.put(:gated_node_names, gated_node_names)
       |> Map.put(:approval_policy, approval_policy)
       |> Map.put(:req_options, opts[:req_options] || existing[:req_options] || [])
+      |> Map.put(
+        :max_tool_concurrency,
+        opts[:max_tool_concurrency] || existing[:max_tool_concurrency]
+      )
 
     agent = StratState.put(agent, restored)
     {agent, []}
@@ -106,7 +110,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         suspended_calls: %{},
         children: %{},
         child_phases: %{},
-        hibernate_after: opts[:hibernate_after]
+        hibernate_after: opts[:hibernate_after],
+        max_tool_concurrency: opts[:max_tool_concurrency],
+        queued_tool_calls: []
       })
 
     {agent, []}
@@ -200,7 +206,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
               }
             end)
 
-          check_all_tools_done(agent)
+          {agent, queue_directives} = dispatch_queued_tool_calls(agent)
+          {agent, done_directives} = check_all_tools_done(agent)
+          {agent, queue_directives ++ done_directives}
         end
 
       other ->
@@ -289,7 +297,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         }
       end)
 
-    check_all_tools_done(agent)
+    {agent, queue_directives} = dispatch_queued_tool_calls(agent)
+    {agent, done_directives} = check_all_tools_done(agent)
+    {agent, queue_directives ++ done_directives}
   end
 
   def cmd(agent, [%Jido.Instruction{action: :orchestrator_child_exit} = instr | _], _ctx) do
@@ -617,7 +627,16 @@ defmodule Jido.Composer.Orchestrator.Strategy do
           not requires_approval?(call, state)
         end)
 
-      ungated_ids = Enum.map(ungated, & &1.id)
+      max_tc = state.max_tool_concurrency
+
+      {to_dispatch, to_queue} =
+        if max_tc && max_tc < length(ungated) do
+          Enum.split(ungated, max_tc)
+        else
+          {ungated, []}
+        end
+
+      dispatched_ids = Enum.map(to_dispatch, & &1.id)
 
       # Build gated_calls map: request_id -> %{request, call}
       gated_results =
@@ -658,15 +677,16 @@ defmodule Jido.Composer.Orchestrator.Strategy do
               %{
                 s
                 | status: new_status,
-                  pending_tool_calls: ungated_ids,
+                  pending_tool_calls: dispatched_ids,
                   completed_tool_results: [],
-                  gated_calls: gated_entries
+                  gated_calls: gated_entries,
+                  queued_tool_calls: to_queue
               }
             end)
 
-          # Build directives for ungated calls
+          # Build directives for dispatched (ungated, within concurrency limit) calls
           ungated_directives =
-            Enum.map(ungated, fn call ->
+            Enum.map(to_dispatch, fn call ->
               build_tool_directive(call, state.nodes, state.context)
             end)
 
@@ -764,27 +784,51 @@ defmodule Jido.Composer.Orchestrator.Strategy do
   defp handle_approval_decision(agent, request_id, response, call) do
     case response.decision do
       :approved ->
-        # Remove from gated_calls, dispatch the tool
+        # Remove from gated_calls, dispatch the tool (or queue if at capacity)
         state = StratState.get(agent)
+        max_tc = state.max_tool_concurrency
 
-        agent =
-          StratState.update(agent, fn s ->
-            new_gated = Map.delete(s.gated_calls, request_id)
-            new_pending = s.pending_tool_calls ++ [call.id]
+        if max_tc && length(state.pending_tool_calls) >= max_tc do
+          # At capacity — queue instead of dispatching
+          agent =
+            StratState.update(agent, fn s ->
+              new_gated = Map.delete(s.gated_calls, request_id)
 
-            new_status =
-              cond do
-                new_gated == %{} and new_pending != [] -> :awaiting_tools
-                new_gated == %{} -> :awaiting_tools
-                new_pending != [] -> :awaiting_tools_and_approval
-                true -> :awaiting_approval
-              end
+              new_status =
+                cond do
+                  new_gated == %{} -> :awaiting_tools
+                  true -> :awaiting_tools_and_approval
+                end
 
-            %{s | gated_calls: new_gated, pending_tool_calls: new_pending, status: new_status}
-          end)
+              %{
+                s
+                | gated_calls: new_gated,
+                  queued_tool_calls: s.queued_tool_calls ++ [call],
+                  status: new_status
+              }
+            end)
 
-        directive = build_tool_directive(call, state.nodes, state.context)
-        {agent, [directive]}
+          {agent, []}
+        else
+          agent =
+            StratState.update(agent, fn s ->
+              new_gated = Map.delete(s.gated_calls, request_id)
+              new_pending = s.pending_tool_calls ++ [call.id]
+
+              new_status =
+                cond do
+                  new_gated == %{} and new_pending != [] -> :awaiting_tools
+                  new_gated == %{} -> :awaiting_tools
+                  new_pending != [] -> :awaiting_tools_and_approval
+                  true -> :awaiting_approval
+                end
+
+              %{s | gated_calls: new_gated, pending_tool_calls: new_pending, status: new_status}
+            end)
+
+          directive = build_tool_directive(call, state.nodes, state.context)
+          {agent, [directive]}
+        end
 
       :rejected ->
         comment = response.comment || "No reason provided"
@@ -941,7 +985,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     all_clear =
       state.pending_tool_calls == [] and
         state.gated_calls == %{} and
-        state.suspended_calls == %{}
+        state.suspended_calls == %{} and
+        state.queued_tool_calls == []
 
     if all_clear do
       agent = StratState.update(agent, fn s -> %{s | status: :awaiting_llm} end)
@@ -968,6 +1013,48 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
       agent = StratState.update(agent, fn s -> %{s | status: new_status} end)
       {agent, []}
+    end
+  end
+
+  defp dispatch_queued_tool_calls(agent) do
+    state = StratState.get(agent)
+
+    case state.queued_tool_calls do
+      [] ->
+        {agent, []}
+
+      queued ->
+        max_tc = state.max_tool_concurrency || length(queued)
+        slots = max_tc - length(state.pending_tool_calls)
+
+        if slots <= 0 do
+          {agent, []}
+        else
+          {to_dispatch, remaining} = Enum.split(queued, slots)
+          new_ids = Enum.map(to_dispatch, & &1.id)
+
+          directives =
+            Enum.map(to_dispatch, fn call ->
+              build_tool_directive(call, state.nodes, state.context)
+            end)
+
+          spawn_phases =
+            directives
+            |> Enum.filter(&match?(%Directive.SpawnAgent{}, &1))
+            |> Map.new(fn %Directive.SpawnAgent{tag: tag} -> {tag, :spawning} end)
+
+          agent =
+            StratState.update(agent, fn s ->
+              %{
+                s
+                | pending_tool_calls: s.pending_tool_calls ++ new_ids,
+                  queued_tool_calls: remaining,
+                  child_phases: Map.merge(s.child_phases, spawn_phases)
+              }
+            end)
+
+          {agent, directives}
+        end
     end
   end
 

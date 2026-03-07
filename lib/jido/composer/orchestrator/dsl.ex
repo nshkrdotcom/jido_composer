@@ -34,6 +34,7 @@ defmodule Jido.Composer.Orchestrator.DSL do
     rejection_policy = Keyword.get(opts, :rejection_policy)
     ambient_keys = Keyword.get(opts, :ambient, [])
     fork_fns = Keyword.get(opts, :fork_fns, %{})
+    max_tool_concurrency = Keyword.get(opts, :max_tool_concurrency)
 
     orchestrator_routes = Jido.Composer.Orchestrator.Strategy.signal_routes(%{})
 
@@ -72,6 +73,10 @@ defmodule Jido.Composer.Orchestrator.DSL do
                                 ) ++
                                 if(unquote(Macro.escape(fork_fns)) != %{},
                                   do: [fork_fns: unquote(Macro.escape(fork_fns))],
+                                  else: []
+                                ) ++
+                                if(unquote(max_tool_concurrency) != nil,
+                                  do: [max_tool_concurrency: unquote(max_tool_concurrency)],
                                   else: []
                                 )
 

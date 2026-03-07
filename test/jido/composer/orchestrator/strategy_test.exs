@@ -981,6 +981,190 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
     end
   end
 
+  describe "max_tool_concurrency" do
+    test "dispatches all calls when no limit set" do
+      calls = [
+        %{id: "call_1", name: "add", arguments: %{"value" => 1.0, "amount" => 2.0}},
+        %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}},
+        %{id: "call_3", name: "add", arguments: %{"value" => 3.0, "amount" => 4.0}}
+      ]
+
+      LLMStub.setup([{:tool_calls, calls}])
+      agent = init_agent()
+
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Do"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir)
+
+      {_agent, directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      assert length(directives) == 3
+    end
+
+    test "limits concurrent dispatches" do
+      calls = [
+        %{id: "call_1", name: "add", arguments: %{"value" => 1.0, "amount" => 2.0}},
+        %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}},
+        %{id: "call_3", name: "add", arguments: %{"value" => 3.0, "amount" => 4.0}}
+      ]
+
+      LLMStub.setup([{:tool_calls, calls}])
+      agent = init_agent(max_tool_concurrency: 1)
+
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Do"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir)
+
+      {agent, directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      # Only 1 directive dispatched
+      assert length(directives) == 1
+      assert hd(directives).meta.call_id == "call_1"
+
+      state = get_state(agent)
+      assert state.pending_tool_calls == ["call_1"]
+      assert length(state.queued_tool_calls) == 2
+    end
+
+    test "queued calls dispatch as slots open" do
+      calls = [
+        %{id: "call_1", name: "add", arguments: %{"value" => 1.0, "amount" => 2.0}},
+        %{id: "call_2", name: "echo", arguments: %{"message" => "hello"}},
+        %{id: "call_3", name: "add", arguments: %{"value" => 3.0, "amount" => 4.0}}
+      ]
+
+      LLMStub.setup([
+        {:tool_calls, calls},
+        {:final_answer, "Done"}
+      ])
+
+      agent = init_agent(max_tool_concurrency: 1)
+
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Do"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir)
+
+      {agent, [d1]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      # Complete first tool — should dispatch second from queue
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:orchestrator_tool_result, %{
+              status: :ok,
+              result: %{result: 3.0},
+              meta: d1.meta
+            })
+          ],
+          ctx()
+        )
+
+      # Should get 1 queued dispatch directive (no LLM call yet, 1 more queued)
+      assert length(directives) == 1
+      [d2] = directives
+      assert d2.meta.call_id == "call_2"
+
+      state = get_state(agent)
+      assert state.pending_tool_calls == ["call_2"]
+      assert length(state.queued_tool_calls) == 1
+
+      # Complete second tool — should dispatch third from queue
+      {agent, [d3]} =
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:orchestrator_tool_result, %{
+              status: :ok,
+              result: %{echoed: "hello"},
+              meta: d2.meta
+            })
+          ],
+          ctx()
+        )
+
+      assert d3.meta.call_id == "call_3"
+
+      state = get_state(agent)
+      assert state.pending_tool_calls == ["call_3"]
+      assert state.queued_tool_calls == []
+
+      # Complete third tool — queue empty, all done, should trigger LLM call
+      {agent, directives} =
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:orchestrator_tool_result, %{
+              status: :ok,
+              result: %{result: 7.0},
+              meta: d3.meta
+            })
+          ],
+          ctx()
+        )
+
+      assert [%Jido.Agent.Directive.RunInstruction{result_action: :orchestrator_llm_result}] =
+               directives
+
+      state = get_state(agent)
+      assert state.status == :awaiting_llm
+    end
+
+    test "approved gated call queued when at capacity" do
+      calls = [
+        %{id: "call_1", name: "echo", arguments: %{"message" => "hello"}},
+        %{id: "call_2", name: "add", arguments: %{"value" => 1.0, "amount" => 2.0}}
+      ]
+
+      LLMStub.setup([{:tool_calls, calls}])
+
+      agent = init_agent(max_tool_concurrency: 1, gated_nodes: ["add"])
+
+      {agent, [llm_dir]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "Do"})], ctx())
+
+      llm_result = execute_llm_directive(llm_dir)
+
+      {agent, _directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
+
+      state = get_state(agent)
+      # echo dispatched, add gated
+      assert state.pending_tool_calls == ["call_1"]
+      assert state.queued_tool_calls == []
+      assert map_size(state.gated_calls) == 1
+
+      [{request_id, _entry}] = Map.to_list(state.gated_calls)
+
+      # Approve the gated call while at capacity (1 pending, limit 1)
+      {agent, approve_directives} =
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:hitl_response, %{
+              request_id: request_id,
+              decision: :approved
+            })
+          ],
+          ctx()
+        )
+
+      # Should NOT dispatch — queued instead
+      assert approve_directives == []
+
+      state = get_state(agent)
+      assert state.gated_calls == %{}
+      assert length(state.queued_tool_calls) == 1
+      assert hd(state.queued_tool_calls).id == "call_2"
+    end
+  end
+
   # Simulates what the runtime does when executing a RunInstruction for LLM
   defp execute_llm_directive(%Jido.Agent.Directive.RunInstruction{instruction: instr}) do
     result = LLMStub.execute(instr.params)
