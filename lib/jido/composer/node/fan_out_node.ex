@@ -110,6 +110,93 @@ defmodule Jido.Composer.Node.FanOutNode do
     "Fan-out node with #{length(branches)} concurrent branches"
   end
 
+  @impl true
+  @spec to_directive(t(), map(), keyword()) :: Jido.Composer.Node.directive_result()
+  def to_directive(%__MODULE__{} = node, flat_context, opts) do
+    fan_out_id = Keyword.fetch!(opts, :fan_out_id)
+    structured_context = Keyword.get(opts, :structured_context)
+
+    all_branches =
+      Enum.map(node.branches, fn {branch_name, branch_node} ->
+        directive =
+          build_branch_directive(
+            fan_out_id,
+            branch_name,
+            branch_node,
+            flat_context,
+            structured_context
+          )
+
+        {branch_name, directive}
+      end)
+
+    max_concurrency = node.max_concurrency || length(all_branches)
+    {to_dispatch, to_queue} = Enum.split(all_branches, max_concurrency)
+
+    dispatched_names = Enum.map(to_dispatch, fn {name, _} -> name end) |> MapSet.new()
+
+    fan_out_state =
+      Jido.Composer.FanOut.State.new(fan_out_id, node, dispatched_names, to_queue)
+
+    directives = Enum.map(to_dispatch, fn {_name, directive} -> directive end)
+    {:ok, directives, fan_out: fan_out_state}
+  end
+
+  @impl true
+  @spec to_tool_spec(t()) :: nil
+  def to_tool_spec(%__MODULE__{}), do: nil
+
+  defp build_branch_directive(
+         fan_out_id,
+         branch_name,
+         branch_node,
+         flat_context,
+         structured_context
+       ) do
+    alias Jido.Composer.Directive.FanOutBranch
+
+    case branch_node do
+      %Jido.Composer.Node.ActionNode{action_module: action_module} ->
+        %FanOutBranch{
+          fan_out_id: fan_out_id,
+          branch_name: branch_name,
+          instruction: %Jido.Instruction{
+            action: action_module,
+            params: flat_context
+          },
+          result_action: :fan_out_branch_result
+        }
+
+      %Jido.Composer.Node.AgentNode{agent_module: agent_module, opts: opts} ->
+        child_flat =
+          if structured_context do
+            structured_context
+            |> Jido.Composer.Context.fork_for_child()
+            |> Jido.Composer.Context.to_flat_map()
+          else
+            flat_context
+          end
+
+        %FanOutBranch{
+          fan_out_id: fan_out_id,
+          branch_name: branch_name,
+          spawn_agent: %{
+            agent: agent_module,
+            opts: Map.new(opts) |> Map.put(:context, child_flat)
+          },
+          result_action: :fan_out_branch_result
+        }
+
+      fun when is_function(fun, 1) ->
+        %FanOutBranch{
+          fan_out_id: fan_out_id,
+          branch_name: branch_name,
+          instruction: {:function, fun, flat_context},
+          result_action: :fan_out_branch_result
+        }
+    end
+  end
+
   defp execute_branch(branch, context) when is_function(branch, 1) do
     branch.(context)
   end

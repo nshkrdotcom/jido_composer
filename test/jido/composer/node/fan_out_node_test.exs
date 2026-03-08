@@ -336,6 +336,78 @@ defmodule Jido.Composer.Node.FanOutNodeTest do
     end
   end
 
+  describe "to_directive/3" do
+    test "produces FanOutBranch directives and fan_out side effect" do
+      {:ok, add_node} = ActionNode.new(AddAction)
+      {:ok, echo_node} = ActionNode.new(EchoAction)
+
+      {:ok, fan_out} =
+        FanOutNode.new(name: "parallel", branches: [add: add_node, echo: echo_node])
+
+      opts = [fan_out_id: "test_123"]
+
+      assert {:ok, directives, side_effects} =
+               FanOutNode.to_directive(fan_out, %{value: 1.0, amount: 2.0}, opts)
+
+      assert length(directives) == 2
+
+      Enum.each(directives, fn d ->
+        assert %Jido.Composer.Directive.FanOutBranch{} = d
+        assert d.fan_out_id == "test_123"
+        assert d.result_action == :fan_out_branch_result
+      end)
+
+      fan_out_state = Keyword.fetch!(side_effects, :fan_out)
+      assert %Jido.Composer.FanOut.State{} = fan_out_state
+      assert fan_out_state.id == "test_123"
+    end
+
+    test "respects max_concurrency by queuing excess branches" do
+      {:ok, add_node} = ActionNode.new(AddAction)
+      {:ok, echo_node} = ActionNode.new(EchoAction)
+
+      {:ok, fan_out} =
+        FanOutNode.new(
+          name: "parallel",
+          branches: [add: add_node, echo: echo_node],
+          max_concurrency: 1
+        )
+
+      assert {:ok, directives, side_effects} =
+               FanOutNode.to_directive(fan_out, %{}, fan_out_id: "test_456")
+
+      assert length(directives) == 1
+
+      fan_out_state = Keyword.fetch!(side_effects, :fan_out)
+      assert MapSet.size(fan_out_state.pending_branches) == 1
+      assert length(fan_out_state.queued_branches) == 1
+    end
+
+    test "handles function branches" do
+      fun = fn ctx -> {:ok, %{doubled: ctx[:value] * 2}} end
+      {:ok, add_node} = ActionNode.new(AddAction)
+
+      {:ok, fan_out} =
+        FanOutNode.new(name: "mixed", branches: [calc: fun, add: add_node])
+
+      assert {:ok, directives, _} =
+               FanOutNode.to_directive(fan_out, %{value: 5}, fan_out_id: "test_789")
+
+      assert length(directives) == 2
+
+      fn_directive = Enum.find(directives, &(&1.branch_name == :calc))
+      assert {:function, _, _} = fn_directive.instruction
+    end
+  end
+
+  describe "to_tool_spec/1" do
+    test "returns nil (FanOutNode cannot act as LLM tool)" do
+      {:ok, add_node} = ActionNode.new(AddAction)
+      {:ok, fan_out} = FanOutNode.new(name: "test", branches: [add: add_node])
+      assert FanOutNode.to_tool_spec(fan_out) == nil
+    end
+  end
+
   describe "Node behaviour" do
     test "FanOutNode declares Node behaviour" do
       behaviours =

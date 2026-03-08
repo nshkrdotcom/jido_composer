@@ -214,6 +214,54 @@ defmodule Jido.Composer.Node.HumanNodeTest do
     end
   end
 
+  describe "to_directive/3" do
+    test "produces a Suspend directive with pending_suspension side effect" do
+      {:ok, node} =
+        HumanNode.new(
+          name: "approval",
+          description: "Approve action",
+          prompt: "Approve this action?"
+        )
+
+      context = %{amount: 100}
+
+      assert {:ok, [directive], side_effects} = HumanNode.to_directive(node, context, [])
+      assert %Jido.Composer.Directive.Suspend{} = directive
+      assert directive.suspension.reason == :human_input
+      assert Keyword.get(side_effects, :pending_suspension) != nil
+      assert Keyword.get(side_effects, :status) == :waiting
+    end
+
+    test "enriches approval request with provided request_fields" do
+      {:ok, node} =
+        HumanNode.new(
+          name: "deploy_check",
+          description: "Check deploy",
+          prompt: "OK to deploy?"
+        )
+
+      opts = [
+        request_fields: %{
+          agent_id: "agent_123",
+          workflow_state: :deploying,
+          node_name: "deploy_check"
+        }
+      ]
+
+      assert {:ok, [directive], _side_effects} = HumanNode.to_directive(node, %{}, opts)
+      request = directive.suspension.approval_request
+      assert request.agent_id == "agent_123"
+      assert request.workflow_state == :deploying
+    end
+  end
+
+  describe "to_tool_spec/1" do
+    test "returns nil (HumanNode cannot act as LLM tool)" do
+      {:ok, node} = HumanNode.new(name: "n", description: "d", prompt: "p?")
+      assert HumanNode.to_tool_spec(node) == nil
+    end
+  end
+
   describe "Node behaviour" do
     test "HumanNode declares Node behaviour" do
       behaviours =

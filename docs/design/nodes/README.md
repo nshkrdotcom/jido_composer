@@ -20,18 +20,49 @@ for driving [Workflow](../workflow/README.md) transitions.
 
 ## Callbacks
 
-| Callback        | Returns            | Required | Purpose                                          |
-| --------------- | ------------------ | -------- | ------------------------------------------------ |
-| `run/3`         | result (see above) | Yes      | Execute the node's logic (struct, context, opts) |
-| `name/1`        | `String.t()`       | Yes      | Human-readable identifier (receives struct)      |
-| `description/1` | `String.t()`       | Yes      | What this node does (receives struct)            |
-| `schema/1`      | keyword \| nil     | No       | Input parameter schema (receives struct)         |
-| `input_type/1`  | io type or `:any`  | No       | Expected input type (for compile-time warnings)  |
-| `output_type/1` | io type or `:any`  | No       | Produced output type (for compile-time warnings) |
+| Callback         | Returns                                       | Required | Purpose                                              |
+| ---------------- | --------------------------------------------- | -------- | ---------------------------------------------------- |
+| `run/3`          | result (see above)                            | Yes      | Execute the node's logic (struct, context, opts)     |
+| `name/1`         | `String.t()`                                  | Yes      | Human-readable identifier (receives struct)          |
+| `description/1`  | `String.t()`                                  | Yes      | What this node does (receives struct)                |
+| `to_directive/3` | `{:ok, directives}` or `{:ok, dirs, effects}` | No       | Produce directives for strategy dispatch             |
+| `to_tool_spec/1` | `map()` or `nil`                              | No       | Describe self as an LLM tool (nil if not applicable) |
+| `schema/1`       | keyword \| nil                                | No       | Input parameter schema (receives struct)             |
+| `input_type/1`   | io type or `:any`                             | No       | Expected input type (for compile-time warnings)      |
+| `output_type/1`  | io type or `:any`                             | No       | Produced output type (for compile-time warnings)     |
 
 All callbacks receive the node struct as first argument, enabling per-instance
 configuration (e.g., different options for the same action module in different
 workflow states).
+
+### Directive Generation
+
+The `to_directive/3` callback enables polymorphic dispatch — strategies call
+`node.__struct__.to_directive(node, flat_context, opts)` instead of
+pattern-matching on concrete struct types. Each node knows how to produce the
+appropriate directive(s) for execution.
+
+The `opts` keyword list carries strategy-specific metadata so the node remains
+strategy-agnostic:
+
+| Opt Key               | Used By               | Purpose                                                  |
+| --------------------- | --------------------- | -------------------------------------------------------- |
+| `:result_action`      | All                   | Atom for routing results (e.g., `:workflow_node_result`) |
+| `:meta`               | ActionNode            | Metadata map (e.g., `%{call_id: ..., tool_name: ...}`)   |
+| `:tag`                | AgentNode             | Tag for SpawnAgent (FSM state or tool call tuple)        |
+| `:structured_context` | AgentNode, FanOutNode | Full `Context` struct for forking                        |
+| `:tool_args`          | AgentNode             | Tool call arguments to merge (orchestrator)              |
+| `:request_fields`     | HumanNode             | Fields to enrich ApprovalRequest with                    |
+| `:fan_out_id`         | FanOutNode            | Unique fan-out execution ID                              |
+
+Nodes that modify strategy state (HumanNode sets `pending_suspension`,
+FanOutNode sets `fan_out` state) return a 3-tuple `{:ok, directives, side_effects}`
+where `side_effects` is a keyword list the strategy applies generically.
+
+The `to_tool_spec/1` callback returns a `%{name, description, parameter_schema}`
+map used by `AgentTool.to_tool/1` to create `ReqLLM.Tool` structs for
+orchestrator contexts. FanOutNode and HumanNode return `nil` since they are not
+LLM tools.
 
 The optional `input_type/1` and `output_type/1` callbacks declare the node's I/O
 types for compile-time compatibility checking. See
@@ -46,6 +77,8 @@ classDiagram
         +run(node, context, opts) result
         +name(node) String
         +description(node) String
+        +to_directive(node, flat_context, opts) directive_result
+        +to_tool_spec(node) map | nil
         +schema(node) keyword | nil
     }
 

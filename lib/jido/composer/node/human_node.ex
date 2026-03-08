@@ -95,6 +95,37 @@ defmodule Jido.Composer.Node.HumanNode do
   @spec schema(t()) :: keyword() | nil
   def schema(%__MODULE__{response_schema: schema}), do: schema
 
+  @impl true
+  @spec to_directive(t(), map(), keyword()) :: Jido.Composer.Node.directive_result()
+  def to_directive(%__MODULE__{} = node, flat_context, opts) do
+    {:ok, updated_context, :suspend} = run(node, flat_context)
+
+    request = updated_context.__approval_request__
+
+    # Enrich with strategy-provided metadata
+    request_fields = Keyword.get(opts, :request_fields, %{})
+    request = struct(request, request_fields)
+
+    {:ok, suspension} = Jido.Composer.Suspension.from_approval_request(request)
+
+    case Jido.Composer.Directive.SuspendForHuman.new(approval_request: request) do
+      {:ok, directive} ->
+        {:ok, [directive], pending_suspension: suspension, status: :waiting}
+
+      {:error, reason} ->
+        {:ok,
+         [
+           %Jido.Agent.Directive.Error{
+             error: %RuntimeError{message: "Failed to create HITL directive: #{reason}"}
+           }
+         ]}
+    end
+  end
+
+  @impl true
+  @spec to_tool_spec(t()) :: nil
+  def to_tool_spec(%__MODULE__{}), do: nil
+
   defp evaluate_prompt(prompt, _context) when is_binary(prompt), do: prompt
   defp evaluate_prompt(prompt, context) when is_function(prompt, 1), do: prompt.(context)
 

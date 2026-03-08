@@ -628,34 +628,29 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
   defp build_tool_directive(call, nodes, %Context{} = ctx) do
     tool_args = AgentTool.to_context(call)
+    node = nodes[call.name]
 
-    case nodes[call.name] do
-      %ActionNode{action_module: action_module} ->
-        merged_ctx = %{ctx | working: Map.merge(ctx.working, tool_args)}
-        flat = Context.to_flat_map(merged_ctx)
+    # ActionNode gets tool args merged into context; AgentNode handles via :tool_args opt
+    flat_context =
+      case node do
+        %ActionNode{} ->
+          merged_ctx = %{ctx | working: Map.merge(ctx.working, tool_args)}
+          Context.to_flat_map(merged_ctx)
 
-        instruction = %Jido.Instruction{
-          action: action_module,
-          params: flat
-        }
+        _ ->
+          Context.to_flat_map(ctx)
+      end
 
-        %Directive.RunInstruction{
-          instruction: instruction,
-          result_action: :orchestrator_tool_result,
-          meta: %{call_id: call.id, tool_name: call.name}
-        }
+    opts = [
+      result_action: :orchestrator_tool_result,
+      meta: %{call_id: call.id, tool_name: call.name},
+      tag: {:tool_call, call.id, call.name},
+      structured_context: ctx,
+      tool_args: tool_args
+    ]
 
-      %AgentNode{agent_module: agent_module, opts: opts} ->
-        child_ctx = Context.fork_for_child(ctx)
-        child_flat = Context.to_flat_map(child_ctx)
-        merged = Map.merge(child_flat, tool_args)
-
-        %Directive.SpawnAgent{
-          tag: {:tool_call, call.id, call.name},
-          agent: agent_module,
-          opts: Map.new(opts) |> Map.put(:context, merged)
-        }
-    end
+    {:ok, [directive | _]} = node.__struct__.to_directive(node, flat_context, opts)
+    directive
   end
 
   defp emit_llm_call(agent) do

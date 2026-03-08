@@ -120,6 +120,56 @@ defmodule Jido.Composer.Node.AgentNodeTest do
     end
   end
 
+  describe "to_directive/3" do
+    test "produces a SpawnAgent directive with required tag" do
+      {:ok, node} = AgentNode.new(EchoAgent)
+
+      opts = [
+        tag: :step_one,
+        structured_context: %Jido.Composer.Context{}
+      ]
+
+      assert {:ok, [directive]} = AgentNode.to_directive(node, %{}, opts)
+      assert %Jido.Agent.Directive.SpawnAgent{} = directive
+      assert directive.tag == :step_one
+      assert directive.agent == EchoAgent
+      assert is_map(directive.opts[:context])
+    end
+
+    test "merges tool_args into context for orchestrator dispatch" do
+      {:ok, node} = AgentNode.new(EchoAgent)
+
+      opts = [
+        tag: {:tool_call, "call_1", "echo_agent"},
+        structured_context: %Jido.Composer.Context{working: %{existing: "data"}},
+        tool_args: %{query: "hello"}
+      ]
+
+      assert {:ok, [directive]} = AgentNode.to_directive(node, %{}, opts)
+      assert directive.tag == {:tool_call, "call_1", "echo_agent"}
+      assert directive.opts[:context][:query] == "hello"
+    end
+
+    test "uses flat_context when no structured_context provided" do
+      {:ok, node} = AgentNode.new(EchoAgent)
+      flat = %{key: "value"}
+
+      assert {:ok, [directive]} = AgentNode.to_directive(node, flat, tag: :test)
+      assert directive.opts[:context] == flat
+    end
+  end
+
+  describe "to_tool_spec/1" do
+    test "returns tool spec with name and description" do
+      {:ok, node} = AgentNode.new(EchoAgent)
+      spec = AgentNode.to_tool_spec(node)
+
+      assert spec.name == "echo_agent"
+      assert spec.description == "Echoes incoming signal data as state"
+      assert is_map(spec.parameter_schema)
+    end
+  end
+
   describe "Node behaviour" do
     test "AgentNode declares Node behaviour" do
       behaviours =

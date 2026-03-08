@@ -13,10 +13,8 @@ defmodule Jido.Composer.Workflow.Strategy do
   alias Jido.Composer.Checkpoint
   alias Jido.Composer.Children
   alias Jido.Composer.Context
-  alias Jido.Composer.Directive.FanOutBranch
   alias Jido.Composer.Directive.Suspend, as: SuspendDirective
   alias Jido.Composer.FanOut.State, as: FanOutState
-  alias Jido.Composer.Directive.SuspendForHuman
   alias Jido.Composer.HITL.{ApprovalRequest, ApprovalResponse}
   alias Jido.Composer.Node.ActionNode
   alias Jido.Composer.Node.AgentNode
@@ -414,86 +412,77 @@ defmodule Jido.Composer.Workflow.Strategy do
     strat = StratState.get(agent)
     node = Machine.current_node(strat.machine)
 
+    if is_nil(node) do
+      {agent, []}
+    else
+      flat_context = Context.to_flat_map(strat.machine.context)
+      opts = build_node_dispatch_opts(node, strat)
+
+      case node.__struct__.to_directive(node, flat_context, opts) do
+        {:ok, directives} ->
+          {agent, directives}
+
+        {:ok, directives, side_effects} ->
+          agent = apply_node_side_effects(agent, node, side_effects)
+          {agent, directives}
+      end
+    end
+  end
+
+  defp build_node_dispatch_opts(node, strat) do
+    base = [result_action: :workflow_node_result, structured_context: strat.machine.context]
+
     case node do
-      %ActionNode{action_module: action_module} ->
-        instruction = %Jido.Instruction{
-          action: action_module,
-          params: Context.to_flat_map(strat.machine.context)
-        }
+      %AgentNode{} ->
+        Keyword.put(base, :tag, strat.machine.status)
 
-        directive = %Directive.RunInstruction{
-          instruction: instruction,
-          result_action: :workflow_node_result
-        }
+      %HumanNode{} ->
+        Keyword.put(base, :request_fields, %{
+          agent_id: Map.get(strat, :agent_id),
+          agent_module: Map.get(strat, :agent_module),
+          workflow_state: strat.machine.status,
+          node_name: HumanNode.name(node)
+        })
 
-        {agent, [directive]}
+      %FanOutNode{} ->
+        Keyword.put(base, :fan_out_id, generate_fan_out_id())
 
-      %AgentNode{agent_module: agent_module, opts: opts} ->
-        tag = strat.machine.status
-        child_context = Context.fork_for_child(strat.machine.context)
-        child_flat = Context.to_flat_map(child_context)
-
-        agent =
-          StratState.update(agent, fn s ->
-            %{s | children: Children.set_phase(s.children, tag, :spawning)}
-          end)
-
-        directive = %Directive.SpawnAgent{
-          tag: tag,
-          agent: agent_module,
-          opts: Map.new(opts) |> Map.put(:context, child_flat)
-        }
-
-        {agent, [directive]}
-
-      %HumanNode{} = human_node ->
-        dispatch_human_node(agent, human_node, strat)
-
-      %FanOutNode{} = fan_out_node ->
-        dispatch_fan_out(agent, fan_out_node, strat)
-
-      nil ->
-        {agent, []}
+      _ ->
+        base
     end
   end
 
-  defp dispatch_human_node(agent, human_node, strat) do
-    flat_context = Context.to_flat_map(strat.machine.context)
-    {:ok, updated_context, :suspend} = HumanNode.run(human_node, flat_context)
+  defp apply_node_side_effects(agent, node, side_effects) do
+    Enum.reduce(side_effects, agent, fn
+      {:fan_out, fan_out_state}, agent ->
+        StratState.update(agent, fn s -> %{s | fan_out: fan_out_state} end)
 
-    # Extract and enrich the ApprovalRequest
-    request = updated_context.__approval_request__
+      {:pending_suspension, suspension}, agent ->
+        StratState.update(agent, fn s -> %{s | pending_suspension: suspension} end)
 
-    request = %{
-      request
-      | agent_id: Map.get(strat, :agent_id),
-        agent_module: Map.get(strat, :agent_module),
-        workflow_state: strat.machine.status,
-        node_name: HumanNode.name(human_node)
-    }
+      {:status, status}, agent ->
+        StratState.update(agent, fn s -> %{s | status: status} end)
 
-    # Create Suspension from ApprovalRequest
-    {:ok, suspension} = Suspension.from_approval_request(request)
+      {:children_phase, {tag, phase}}, agent ->
+        StratState.update(agent, fn s ->
+          %{s | children: Children.set_phase(s.children, tag, phase)}
+        end)
 
-    # Store pending suspension, set status to :waiting
-    agent =
-      StratState.update(agent, fn s ->
-        %{s | status: :waiting, pending_suspension: suspension}
-      end)
-
-    case SuspendForHuman.new(approval_request: request) do
-      {:ok, directive} ->
-        {agent, [directive]}
-
-      {:error, reason} ->
-        {agent,
-         [
-           %Directive.Error{
-             error: %RuntimeError{message: "Failed to create HITL directive: #{reason}"}
-           }
-         ]}
-    end
+      _, agent ->
+        agent
+    end)
+    |> maybe_set_spawning_phase(node)
   end
+
+  defp maybe_set_spawning_phase(agent, %AgentNode{}) do
+    strat = StratState.get(agent)
+
+    StratState.update(agent, fn s ->
+      %{s | children: Children.set_phase(s.children, strat.machine.status, :spawning)}
+    end)
+  end
+
+  defp maybe_set_spawning_phase(agent, _node), do: agent
 
   defp handle_node_suspend(agent, result, strat) do
     suspension =
@@ -705,67 +694,6 @@ defmodule Jido.Composer.Workflow.Strategy do
 
     agent = StratState.update(agent, fn s -> %{s | fan_out: fan_out} end)
     maybe_complete_fan_out(agent, new_directives)
-  end
-
-  defp dispatch_fan_out(agent, %FanOutNode{} = fan_out_node, strat) do
-    fan_out_id = generate_fan_out_id()
-    flat_context = Context.to_flat_map(strat.machine.context)
-
-    all_branches =
-      Enum.map(fan_out_node.branches, fn {branch_name, branch_node} ->
-        {branch_name,
-         build_fan_out_directive(fan_out_id, branch_name, branch_node, flat_context, strat)}
-      end)
-
-    max_concurrency = fan_out_node.max_concurrency || length(all_branches)
-    {to_dispatch, to_queue} = Enum.split(all_branches, max_concurrency)
-
-    dispatched_names = Enum.map(to_dispatch, fn {name, _} -> name end) |> MapSet.new()
-
-    fan_out_state = FanOutState.new(fan_out_id, fan_out_node, dispatched_names, to_queue)
-
-    agent =
-      StratState.update(agent, fn s -> %{s | fan_out: fan_out_state} end)
-
-    directives = Enum.map(to_dispatch, fn {_name, directive} -> directive end)
-    {agent, directives}
-  end
-
-  defp build_fan_out_directive(fan_out_id, branch_name, branch_node, flat_context, strat) do
-    case branch_node do
-      %ActionNode{action_module: action_module} ->
-        %FanOutBranch{
-          fan_out_id: fan_out_id,
-          branch_name: branch_name,
-          instruction: %Jido.Instruction{
-            action: action_module,
-            params: flat_context
-          },
-          result_action: :fan_out_branch_result
-        }
-
-      %AgentNode{agent_module: agent_module, opts: opts} ->
-        child_context = Context.fork_for_child(strat.machine.context)
-        child_flat = Context.to_flat_map(child_context)
-
-        %FanOutBranch{
-          fan_out_id: fan_out_id,
-          branch_name: branch_name,
-          spawn_agent: %{
-            agent: agent_module,
-            opts: Map.new(opts) |> Map.put(:context, child_flat)
-          },
-          result_action: :fan_out_branch_result
-        }
-
-      fun when is_function(fun, 1) ->
-        %FanOutBranch{
-          fan_out_id: fan_out_id,
-          branch_name: branch_name,
-          instruction: {:function, fun, flat_context},
-          result_action: :fan_out_branch_result
-        }
-    end
   end
 
   defp dispatch_queued_branches(fan_out) do

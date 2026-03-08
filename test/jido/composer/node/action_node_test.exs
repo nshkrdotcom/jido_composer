@@ -74,6 +74,45 @@ defmodule Jido.Composer.Node.ActionNodeTest do
     end
   end
 
+  describe "to_directive/3" do
+    test "produces a RunInstruction directive with default result_action" do
+      {:ok, node} = ActionNode.new(AddAction)
+      flat_context = %{value: 1.0, amount: 2.0}
+
+      assert {:ok, [directive]} = ActionNode.to_directive(node, flat_context, [])
+      assert %Jido.Agent.Directive.RunInstruction{} = directive
+      assert directive.instruction.action == AddAction
+      assert directive.instruction.params == flat_context
+      assert directive.result_action == :workflow_node_result
+      assert directive.meta == %{}
+    end
+
+    test "uses provided result_action and meta" do
+      {:ok, node} = ActionNode.new(AddAction)
+      flat_context = %{value: 1.0, amount: 2.0}
+
+      opts = [
+        result_action: :orchestrator_tool_result,
+        meta: %{call_id: "call_1", tool_name: "add"}
+      ]
+
+      assert {:ok, [directive]} = ActionNode.to_directive(node, flat_context, opts)
+      assert directive.result_action == :orchestrator_tool_result
+      assert directive.meta == %{call_id: "call_1", tool_name: "add"}
+    end
+  end
+
+  describe "to_tool_spec/1" do
+    test "returns tool spec with name, description, and parameter_schema" do
+      {:ok, node} = ActionNode.new(AddAction)
+      spec = ActionNode.to_tool_spec(node)
+
+      assert spec.name == "add"
+      assert spec.description == "Adds an amount to a value"
+      assert is_map(spec.parameter_schema)
+    end
+  end
+
   describe "metadata delegation" do
     test "name/1 delegates to action module" do
       {:ok, node} = ActionNode.new(AddAction)

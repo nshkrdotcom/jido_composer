@@ -16,17 +16,18 @@ defmodule Jido.Composer.Orchestrator.AgentTool do
 
   Returns `%ReqLLM.Tool{}` with name, description, parameter_schema (JSON Schema map),
   and a no-op callback (the orchestrator executes tools externally).
+
+  Node structs delegate to their `to_tool_spec/1` callback. Raw action modules
+  are handled directly for the termination tool use case.
   """
   @spec to_tool(ActionNode.t() | AgentNode.t() | module()) :: ReqLLM.Tool.t()
-  def to_tool(%ActionNode{action_module: mod}) do
-    to_tool(mod)
-  end
+  def to_tool(%mod{} = node) when mod in [ActionNode, AgentNode] do
+    spec = mod.to_tool_spec(node)
 
-  def to_tool(%AgentNode{agent_module: mod}) do
     ReqLLM.Tool.new!(
-      name: mod.name(),
-      description: mod.description(),
-      parameter_schema: build_agent_parameters(mod),
+      name: spec.name,
+      description: spec.description,
+      parameter_schema: spec.parameter_schema,
       callback: fn _args -> {:ok, :noop} end
     )
   end
@@ -38,16 +39,6 @@ defmodule Jido.Composer.Orchestrator.AgentTool do
       parameter_schema: Jido.Action.Tool.build_parameters_schema(module.schema()),
       callback: fn _args -> {:ok, :noop} end
     )
-  end
-
-  defp build_agent_parameters(mod) do
-    schema = mod.schema()
-
-    if is_list(schema) do
-      Jido.Action.Tool.build_parameters_schema(schema)
-    else
-      %{"type" => "object", "properties" => %{}, "required" => []}
-    end
   end
 
   @doc """

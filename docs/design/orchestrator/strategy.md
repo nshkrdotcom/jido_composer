@@ -149,16 +149,25 @@ through without inspection. See
 
 ## Tool Execution
 
-When the LLM returns tool calls:
+When the LLM returns tool calls, the strategy dispatches each call
+polymorphically via `node.__struct__.to_directive(node, flat_context, opts)`.
+The node produces the appropriate directive type:
 
-- **ActionNode tools** — The strategy creates an Instruction from the node's
-  action module with the tool call arguments as params, then emits a
-  RunInstruction directive. The result flows back as `:orchestrator_tool_result`.
+- **ActionNode** — `to_directive/3` produces a RunInstruction with the action
+  module and tool call arguments merged into the context. Results flow back as
+  `:orchestrator_tool_result`.
 
-- **AgentNode tools** — The strategy emits a SpawnAgent directive. The child
-  agent lifecycle follows the same pattern as in
+- **AgentNode** — `to_directive/3` produces a SpawnAgent directive with the
+  tool call arguments merged into a forked child context. The child agent
+  lifecycle follows the same pattern as in
   [Workflow AgentNode execution](../workflow/strategy.md#execution-flow-agentnode).
   Results flow back as `:orchestrator_child_result`.
+
+Tool metadata (`call_id`, `tool_name`) is passed via the `:meta` and `:tag`
+opts, keeping the node implementation strategy-agnostic.
+
+`AgentTool.to_tool/1` delegates to each node's `to_tool_spec/1` callback to
+build `ReqLLM.Tool` structs for the LLM.
 
 In both cases, results are collected as normalized `tool_result` structs
 (`%{id, name, result}`) and passed to the next LLMAction call via

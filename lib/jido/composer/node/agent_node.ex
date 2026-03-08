@@ -98,6 +98,56 @@ defmodule Jido.Composer.Node.AgentNode do
   @spec schema(t()) :: term()
   def schema(%__MODULE__{agent_module: mod}), do: mod.schema()
 
+  @impl true
+  @spec to_directive(t(), map(), keyword()) :: Jido.Composer.Node.directive_result()
+  def to_directive(%__MODULE__{agent_module: agent_module, opts: opts}, flat_context, kw_opts) do
+    tag = Keyword.fetch!(kw_opts, :tag)
+    context = Keyword.get(kw_opts, :structured_context)
+
+    child_flat =
+      if context do
+        context
+        |> Jido.Composer.Context.fork_for_child()
+        |> Jido.Composer.Context.to_flat_map()
+      else
+        flat_context
+      end
+
+    # Merge tool args if provided (orchestrator context)
+    child_flat =
+      case Keyword.get(kw_opts, :tool_args) do
+        nil -> child_flat
+        args -> Map.merge(child_flat, args)
+      end
+
+    directive = %Jido.Agent.Directive.SpawnAgent{
+      tag: tag,
+      agent: agent_module,
+      opts: Map.new(opts) |> Map.put(:context, child_flat)
+    }
+
+    {:ok, [directive]}
+  end
+
+  @impl true
+  @spec to_tool_spec(t()) :: map()
+  def to_tool_spec(%__MODULE__{agent_module: mod}) do
+    schema = mod.schema()
+
+    parameter_schema =
+      if is_list(schema) do
+        Jido.Action.Tool.build_parameters_schema(schema)
+      else
+        %{"type" => "object", "properties" => %{}, "required" => []}
+      end
+
+    %{
+      name: mod.name(),
+      description: mod.description(),
+      parameter_schema: parameter_schema
+    }
+  end
+
   @spec timeout(t()) :: pos_integer()
   def timeout(%__MODULE__{opts: opts}), do: Keyword.get(opts, :timeout, @default_timeout)
 end

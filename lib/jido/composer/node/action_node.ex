@@ -51,6 +51,36 @@ defmodule Jido.Composer.Node.ActionNode do
   @spec schema(t()) :: keyword() | nil
   def schema(%__MODULE__{action_module: mod}), do: mod.schema()
 
+  @impl true
+  @spec to_directive(t(), map(), keyword()) :: Jido.Composer.Node.directive_result()
+  def to_directive(%__MODULE__{action_module: action_module}, flat_context, opts) do
+    result_action = Keyword.get(opts, :result_action, :workflow_node_result)
+    meta = Keyword.get(opts, :meta, %{})
+
+    instruction = %Jido.Instruction{
+      action: action_module,
+      params: flat_context
+    }
+
+    directive = %Jido.Agent.Directive.RunInstruction{
+      instruction: instruction,
+      result_action: result_action,
+      meta: meta
+    }
+
+    {:ok, [directive]}
+  end
+
+  @impl true
+  @spec to_tool_spec(t()) :: map()
+  def to_tool_spec(%__MODULE__{action_module: mod}) do
+    %{
+      name: mod.name(),
+      description: mod.description(),
+      parameter_schema: Jido.Action.Tool.build_parameters_schema(mod.schema())
+    }
+  end
+
   defp action_module?(module) do
     Code.ensure_loaded?(module) && function_exported?(module, :run, 2)
   end

@@ -103,28 +103,31 @@ The strategy pattern-matches on `instruction.action` to dispatch:
 | `:suspend_timeout`        | Timeout fired            | Use timeout outcome for transition if suspension still pending                                                      |
 | `:child_hibernated`       | Child checkpointed       | Update [ChildRef](../hitl/persistence.md#childref-serializable-child-references) to `:paused`, store checkpoint key |
 
-## Execution Flow: ActionNode
+## Execution Flow: Node Dispatch
+
+The strategy dispatches the current node polymorphically via
+`node.__struct__.to_directive(node, flat_context, opts)`. Each node type
+produces the appropriate directive(s). The strategy applies any side effects
+returned (e.g., fan-out state, pending suspension) and emits the directives.
 
 ```mermaid
 flowchart TB
     A["cmd(:workflow_start)"]
     B["Look up current state's node"]
-    C{"Is ActionNode?"}
-    D["Create Instruction from action module + context"]
-    E["Emit RunInstruction directive"]
-    F["Runtime executes action"]
-    G["cmd(:workflow_node_result, result)"]
-    H["Scope result under state name, deep-merge into machine context"]
-    I["Extract outcome from result"]
-    J["Machine.transition(outcome)"]
-    K{"Terminal state?"}
-    L["Done — return accumulated context"]
-    M["Dispatch next node (go to B)"]
+    C["node.__struct__.to_directive(node, ctx, opts)"]
+    D["Apply side effects, emit directives"]
+    E["Runtime executes directive"]
+    F["cmd(:workflow_node_result, result)"]
+    G["Scope result under state name, deep-merge into machine context"]
+    H["Extract outcome from result"]
+    I["Machine.transition(outcome)"]
+    J{"Terminal state?"}
+    K["Done — return accumulated context"]
+    L["Dispatch next node (go to B)"]
 
-    A --> B --> C
-    C -->|yes| D --> E --> F --> G --> H --> I --> J --> K
-    K -->|yes| L
-    K -->|no| M --> B
+    A --> B --> C --> D --> E --> F --> G --> H --> I --> J
+    J -->|yes| K
+    J -->|no| L --> B
 ```
 
 ## Execution Flow: AgentNode
