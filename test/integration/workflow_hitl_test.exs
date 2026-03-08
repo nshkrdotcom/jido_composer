@@ -161,8 +161,14 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
           comment: "Ship it!"
         )
 
+      suspension_id = strat.pending_suspension.id
+
       {agent, directives} =
-        ApprovalWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
+        ApprovalWorkflow.cmd(
+          agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       {agent, _} = execute_workflow(ApprovalWorkflow, agent, directives)
 
@@ -189,8 +195,14 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
           comment: "Too risky"
         )
 
+      suspension_id = strat.pending_suspension.id
+
       {agent, _directives} =
-        ApprovalWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
+        ApprovalWorkflow.cmd(
+          agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       strat = StratState.get(agent)
       assert strat.machine.status == :failed
@@ -208,8 +220,15 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
           decision: :approved
         )
 
+      strat = StratState.get(agent)
+      suspension_id = strat.pending_suspension.id
+
       {agent, directives} =
-        ApprovalWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
+        ApprovalWorkflow.cmd(
+          agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       assert [%Directive.Error{}] = directives
 
@@ -230,8 +249,14 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
           decision: :maybe
         )
 
+      suspension_id = strat.pending_suspension.id
+
       {agent, directives} =
-        ApprovalWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
+        ApprovalWorkflow.cmd(
+          agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       assert [%Directive.Error{}] = directives
       strat = StratState.get(agent)
@@ -275,10 +300,12 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       strat = StratState.get(agent)
       assert strat.status == :waiting
 
+      suspension_id = strat.pending_suspension.id
+
       {agent, directives} =
         TimeoutWorkflow.cmd(
           agent,
-          {:hitl_timeout, %{request_id: strat.pending_suspension.approval_request.id}}
+          {:suspend_timeout, %{suspension_id: suspension_id}}
         )
 
       {agent, _} = execute_workflow(TimeoutWorkflow, agent, directives)
@@ -294,18 +321,25 @@ defmodule Jido.Composer.Integration.WorkflowHITLTest do
       {agent, _remaining} = execute_workflow(TimeoutWorkflow, agent, directives)
 
       strat = StratState.get(agent)
-      request_id = strat.pending_suspension.approval_request.id
+      suspension_id = strat.pending_suspension.id
 
       {:ok, response} =
-        ApprovalResponse.new(request_id: request_id, decision: :approved)
+        ApprovalResponse.new(
+          request_id: strat.pending_suspension.approval_request.id,
+          decision: :approved
+        )
 
       {agent, directives} =
-        TimeoutWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
+        TimeoutWorkflow.cmd(
+          agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       {agent, _} = execute_workflow(TimeoutWorkflow, agent, directives)
 
       {agent, directives} =
-        TimeoutWorkflow.cmd(agent, {:hitl_timeout, %{request_id: request_id}})
+        TimeoutWorkflow.cmd(agent, {:suspend_timeout, %{suspension_id: suspension_id}})
 
       assert directives == []
       strat = StratState.get(agent)

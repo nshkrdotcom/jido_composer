@@ -176,10 +176,15 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
       request_id = inner_strat.pending_suspension.approval_request.id
 
       # Approve
+      suspension_id = inner_strat.pending_suspension.id
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
 
       {inner_agent, directives} =
-        InnerWorkflow.cmd(inner_agent, {:hitl_response, Map.from_struct(response)})
+        InnerWorkflow.cmd(
+          inner_agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       {inner_agent, _} = execute_workflow_directives(InnerWorkflow, inner_agent, directives)
 
@@ -267,11 +272,16 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
       restored_agent = StratState.put(fresh_agent, restored_strat)
 
       # Resume with approval
+      suspension_id = restored_strat.pending_suspension.id
       request_id = restored_strat.pending_suspension.approval_request.id
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
 
       {resumed_agent, directives} =
-        InnerWorkflow.cmd(restored_agent, {:hitl_response, Map.from_struct(response)})
+        InnerWorkflow.cmd(
+          restored_agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       {final_agent, _} = execute_workflow_directives(InnerWorkflow, resumed_agent, directives)
 
@@ -321,7 +331,12 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
       {resumed_agent, directives} =
         OrchStrategy.cmd(
           restored_agent,
-          [make_instruction(:hitl_response, Map.from_struct(response))],
+          [
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: Map.from_struct(response)
+            })
+          ],
           %{}
         )
 

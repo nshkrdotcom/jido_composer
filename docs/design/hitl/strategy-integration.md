@@ -32,15 +32,14 @@ continues to work unchanged.
 
 Both strategies declare routes for suspension signals:
 
-| Signal Type                | Target                              | Purpose                       |
-| -------------------------- | ----------------------------------- | ----------------------------- |
-| `composer.suspend.resume`  | `{:strategy_cmd, :suspend_resume}`  | Resume from any suspension    |
-| `composer.suspend.timeout` | `{:strategy_cmd, :suspend_timeout}` | Suspension timeout fired      |
-| `composer.hitl.response`   | `{:strategy_cmd, :hitl_response}`   | Human decision (legacy alias) |
-| `composer.hitl.timeout`    | `{:strategy_cmd, :hitl_timeout}`    | HITL timeout (legacy alias)   |
+| Signal Type                | Target                              | Purpose                                           |
+| -------------------------- | ----------------------------------- | ------------------------------------------------- |
+| `composer.suspend.resume`  | `{:strategy_cmd, :suspend_resume}`  | Resume from any suspension (including HITL)       |
+| `composer.suspend.timeout` | `{:strategy_cmd, :suspend_timeout}` | Suspension timeout fired (including HITL timeout) |
 
 These routes sit alongside the existing strategy routes (e.g.,
-`composer.workflow.start`, `composer.orchestrator.query`).
+`composer.workflow.start`, `composer.orchestrator.query`). HITL approvals
+and timeouts use the same generalized suspend/resume mechanism.
 
 ## Workflow Strategy
 

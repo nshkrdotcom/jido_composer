@@ -308,90 +308,20 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     {agent, []}
   end
 
-  def cmd(agent, [%Jido.Instruction{action: :hitl_response} = instr | _], _ctx) do
-    strat = StratState.get(agent)
-    response_data = instr.params
-    request_id = response_data.request_id
-
-    case ApprovalGate.get(strat.approval_gate, request_id) do
-      nil ->
-        {agent,
-         [
-           %Directive.Error{
-             error: %RuntimeError{message: "No pending approval for #{request_id}"}
-           }
-         ]}
-
-      %{request: request, call: call} ->
-        case ApprovalResponse.new(
-               request_id: response_data.request_id,
-               decision: response_data.decision,
-               data: Map.get(response_data, :data),
-               respondent: Map.get(response_data, :respondent),
-               comment: Map.get(response_data, :comment),
-               responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
-             ) do
-          {:ok, response} ->
-            case ApprovalResponse.validate(response, request) do
-              :ok ->
-                handle_approval_decision(agent, request_id, response, call)
-
-              {:error, reason} ->
-                {agent,
-                 [
-                   %Directive.Error{
-                     error: %RuntimeError{message: "HITL validation failed: #{reason}"}
-                   }
-                 ]}
-            end
-
-          {:error, reason} ->
-            {agent,
-             [
-               %Directive.Error{
-                 error: %RuntimeError{message: "HITL response invalid: #{reason}"}
-               }
-             ]}
-        end
-    end
-  end
-
-  def cmd(agent, [%Jido.Instruction{action: :hitl_timeout} = instr | _], _ctx) do
-    strat = StratState.get(agent)
-    request_id = instr.params[:request_id]
-
-    case ApprovalGate.get(strat.approval_gate, request_id) do
-      %{call: call} ->
-        # Treat timeout as rejection
-        handle_approval_rejection(agent, request_id, call, "Approval timed out")
-
-      nil ->
-        {agent, []}
-    end
-  end
-
-  # Generalized suspend resume for orchestrator tool calls
+  # Generalized suspend resume for orchestrator tool calls and approval gate
   def cmd(agent, [%Jido.Instruction{action: :suspend_resume} = instr | _], _ctx) do
     strat = StratState.get(agent)
     params = instr.params
     suspension_id = params[:suspension_id]
 
-    case Map.get(strat.suspended_calls, suspension_id) do
-      nil ->
-        {agent,
-         [
-           %Directive.Error{
-             error: %RuntimeError{message: "No suspended call for #{inspect(suspension_id)}"}
-           }
-         ]}
-
-      %{suspension: _suspension, call: call} ->
-        # Resume the suspended tool call — build and dispatch the directive
+    cond do
+      # Priority 1: Suspended tool call
+      Map.has_key?(strat.suspended_calls, suspension_id) ->
+        %{call: call} = Map.get(strat.suspended_calls, suspension_id)
         outcome = params[:outcome] || :ok
         data = params[:data]
 
         if outcome == :ok and data != nil do
-          # Provide data directly as tool result
           tool_result = AgentTool.to_tool_result(call.id, call.name, {:ok, data})
           scope_key = scope_atom(agent, call.name)
 
@@ -416,7 +346,6 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
           check_all_tools_done(agent)
         else
-          # Re-dispatch the tool call
           agent =
             StratState.update(agent, fn s ->
               new_suspended = Map.delete(s.suspended_calls, suspension_id)
@@ -428,6 +357,19 @@ defmodule Jido.Composer.Orchestrator.Strategy do
           directive = build_tool_directive(call, state.nodes, state.context)
           {agent, [directive]}
         end
+
+      # Priority 2: Approval gate entry
+      ApprovalGate.get(strat.approval_gate, suspension_id) != nil ->
+        handle_approval_resume(agent, strat, suspension_id, params)
+
+      # Priority 3: No match
+      true ->
+        {agent,
+         [
+           %Directive.Error{
+             error: %RuntimeError{message: "No suspended call for #{inspect(suspension_id)}"}
+           }
+         ]}
     end
   end
 
@@ -436,9 +378,10 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     strat = StratState.get(agent)
     suspension_id = instr.params[:suspension_id]
 
-    case Map.get(strat.suspended_calls, suspension_id) do
-      %{call: call} ->
-        # Treat as error result for the tool call
+    cond do
+      Map.has_key?(strat.suspended_calls, suspension_id) ->
+        %{call: call} = Map.get(strat.suspended_calls, suspension_id)
+
         tool_result =
           AgentTool.to_tool_result(
             call.id,
@@ -465,7 +408,11 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
         check_all_tools_done(agent)
 
-      nil ->
+      ApprovalGate.get(strat.approval_gate, suspension_id) != nil ->
+        %{call: call} = ApprovalGate.get(strat.approval_gate, suspension_id)
+        handle_approval_rejection(agent, suspension_id, call, "Approval timed out")
+
+      true ->
         {agent, []}
     end
   end
@@ -515,8 +462,6 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       {"jido.agent.child.exit", {:strategy_cmd, :orchestrator_child_exit}},
       {"composer.suspend.resume", {:strategy_cmd, :suspend_resume}},
       {"composer.suspend.timeout", {:strategy_cmd, :suspend_timeout}},
-      {"composer.hitl.response", {:strategy_cmd, :hitl_response}},
-      {"composer.hitl.timeout", {:strategy_cmd, :hitl_timeout}},
       {"composer.child.hibernated", {:strategy_cmd, :child_hibernated}}
     ]
   end
@@ -742,6 +687,42 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       },
       result_action: :orchestrator_llm_result
     }
+  end
+
+  defp handle_approval_resume(agent, strat, request_id, params) do
+    %{request: request, call: call} = ApprovalGate.get(strat.approval_gate, request_id)
+    response_data = params[:response_data] || params
+
+    case ApprovalResponse.new(
+           request_id: response_data[:request_id] || request_id,
+           decision: response_data[:decision],
+           data: Map.get(response_data, :data),
+           respondent: Map.get(response_data, :respondent),
+           comment: Map.get(response_data, :comment),
+           responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
+         ) do
+      {:ok, response} ->
+        case ApprovalResponse.validate(response, request) do
+          :ok ->
+            handle_approval_decision(agent, request_id, response, call)
+
+          {:error, reason} ->
+            {agent,
+             [
+               %Directive.Error{
+                 error: %RuntimeError{message: "HITL validation failed: #{reason}"}
+               }
+             ]}
+        end
+
+      {:error, reason} ->
+        {agent,
+         [
+           %Directive.Error{
+             error: %RuntimeError{message: "HITL response invalid: #{reason}"}
+           }
+         ]}
+    end
   end
 
   defp handle_approval_decision(agent, request_id, response, call) do

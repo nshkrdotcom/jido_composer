@@ -1444,10 +1444,13 @@ defmodule Jido.Composer.E2E.E2ETest do
           decision: :approved
         )
 
+      suspension_id = restored.pending_suspension.id
+
       {resumed_agent, resume_directives} =
         CheckpointE2EWorkflow.cmd(
           restored_agent,
-          {:hitl_response, Map.from_struct(response)}
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
         )
 
       # Phase 6: Execute to completion

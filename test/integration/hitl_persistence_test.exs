@@ -158,8 +158,14 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
           decision: :approved
         )
 
+      suspension_id = restored.pending_suspension.id
+
       {resumed_agent, directives} =
-        PersistWorkflow.cmd(restored_agent, {:hitl_response, Map.from_struct(response)})
+        PersistWorkflow.cmd(
+          restored_agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       # Execute remaining
       {final_agent, _} = execute_until_suspend(PersistWorkflow, resumed_agent, directives)
@@ -176,6 +182,7 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
       {agent, _remaining} = run_to_suspend(agent)
 
       strat = StratState.get(agent)
+      suspension_id = strat.pending_suspension.id
       request_id = strat.pending_suspension.approval_request.id
 
       # First resume
@@ -183,11 +190,19 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
         ApprovalResponse.new(request_id: request_id, decision: :approved)
 
       {agent, _directives} =
-        PersistWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
+        PersistWorkflow.cmd(
+          agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       # Second resume — should get error (no pending request)
       {_agent, directives} =
-        PersistWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
+        PersistWorkflow.cmd(
+          agent,
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
+        )
 
       assert [%Jido.Agent.Directive.Error{}] = directives
     end

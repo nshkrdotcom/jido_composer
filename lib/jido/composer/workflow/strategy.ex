@@ -286,86 +286,6 @@ defmodule Jido.Composer.Workflow.Strategy do
     end
   end
 
-  # Legacy HITL response — delegate to suspend_resume
-  def cmd(agent, [%Jido.Instruction{action: :hitl_response} = instr | _rest], _ctx) do
-    strat = StratState.get(agent)
-
-    case strat.pending_suspension do
-      nil ->
-        {agent, [%Directive.Error{error: %RuntimeError{message: "No pending HITL request"}}]}
-
-      %Suspension{reason: :human_input} = suspension ->
-        response_data = instr.params
-
-        case ApprovalResponse.new(
-               request_id: response_data.request_id,
-               decision: response_data.decision,
-               data: Map.get(response_data, :data),
-               respondent: Map.get(response_data, :respondent),
-               comment: Map.get(response_data, :comment),
-               responded_at: Map.get(response_data, :responded_at, DateTime.utc_now())
-             ) do
-          {:ok, response} ->
-            case ApprovalResponse.validate(response, suspension.approval_request) do
-              :ok ->
-                handle_hitl_decision(agent, response)
-
-              {:error, reason} ->
-                {agent,
-                 [
-                   %Directive.Error{
-                     error: %RuntimeError{message: "HITL validation failed: #{reason}"}
-                   }
-                 ]}
-            end
-
-          {:error, reason} ->
-            {agent,
-             [
-               %Directive.Error{
-                 error: %RuntimeError{message: "HITL response invalid: #{reason}"}
-               }
-             ]}
-        end
-
-      %Suspension{} ->
-        {agent,
-         [%Directive.Error{error: %RuntimeError{message: "Pending suspension is not HITL"}}]}
-    end
-  end
-
-  # Legacy HITL timeout — delegate to suspend_timeout
-  def cmd(agent, [%Jido.Instruction{action: :hitl_timeout} = instr | _rest], _ctx) do
-    strat = StratState.get(agent)
-    request_id = instr.params[:request_id]
-
-    case strat.pending_suspension do
-      %Suspension{reason: :human_input, approval_request: %ApprovalRequest{id: ^request_id}} =
-          suspension ->
-        timeout_outcome = suspension.timeout_outcome
-
-        agent =
-          StratState.update(agent, fn s ->
-            %{s | status: :running, pending_suspension: nil}
-          end)
-
-        strat = StratState.get(agent)
-
-        case Machine.transition(strat.machine, timeout_outcome) do
-          {:ok, machine} ->
-            agent = put_machine(agent, machine)
-            handle_after_transition(agent)
-
-          {:error, _reason} ->
-            agent = StratState.set_status(agent, :failure)
-            {agent, []}
-        end
-
-      _ ->
-        {agent, []}
-    end
-  end
-
   def cmd(agent, [%Jido.Instruction{action: :child_hibernated} = instr | _], _ctx) do
     params = instr.params
     tag = params[:tag]
@@ -403,8 +323,6 @@ defmodule Jido.Composer.Workflow.Strategy do
       {"composer.fan_out.branch_result", {:strategy_cmd, :fan_out_branch_result}},
       {"composer.suspend.resume", {:strategy_cmd, :suspend_resume}},
       {"composer.suspend.timeout", {:strategy_cmd, :suspend_timeout}},
-      {"composer.hitl.response", {:strategy_cmd, :hitl_response}},
-      {"composer.hitl.timeout", {:strategy_cmd, :hitl_timeout}},
       {"composer.child.hibernated", {:strategy_cmd, :child_hibernated}}
     ]
   end

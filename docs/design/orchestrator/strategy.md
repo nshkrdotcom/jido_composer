@@ -63,10 +63,8 @@ stateDiagram-v2
 | `composer.orchestrator.child.result` | `{:strategy_cmd, :orchestrator_child_result}`  | Result from AgentNode                                                            |
 | `jido.agent.child.started`           | `{:strategy_cmd, :orchestrator_child_started}` | Child agent ready                                                                |
 | `jido.agent.child.exit`              | `{:strategy_cmd, :orchestrator_child_exit}`    | Child agent terminated                                                           |
-| `composer.suspend.resume`            | `{:strategy_cmd, :suspend_resume}`             | Resume from any suspension                                                       |
-| `composer.suspend.timeout`           | `{:strategy_cmd, :suspend_timeout}`            | Suspension timeout fired                                                         |
-| `composer.hitl.response`             | `{:strategy_cmd, :hitl_response}`              | Human decision (legacy alias)                                                    |
-| `composer.hitl.timeout`              | `{:strategy_cmd, :hitl_timeout}`               | HITL timeout (legacy alias)                                                      |
+| `composer.suspend.resume`            | `{:strategy_cmd, :suspend_resume}`             | Resume from any suspension (including HITL approval)                             |
+| `composer.suspend.timeout`           | `{:strategy_cmd, :suspend_timeout}`            | Suspension timeout fired (including HITL approval timeout)                       |
 | `composer.child.hibernated`          | `{:strategy_cmd, :child_hibernated}`           | Child agent [checkpointed](../hitl/persistence.md#cascading-checkpoint-protocol) |
 
 ## Command Actions

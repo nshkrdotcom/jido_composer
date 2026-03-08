@@ -394,7 +394,12 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
       {resumed_agent, directives} =
         OrchStrategy.cmd(
           restored_agent,
-          [make_instruction(:hitl_response, Map.from_struct(response))],
+          [
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: Map.from_struct(response)
+            })
+          ],
           %{}
         )
 
@@ -468,10 +473,13 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
           decision: :approved
         )
 
+      suspension_id = restored.pending_suspension.id
+
       {resumed_agent, directives} =
         WorkflowWithHumanAndOrchestrator.cmd(
           restored_agent,
-          {:hitl_response, Map.from_struct(response)}
+          {:suspend_resume,
+           %{suspension_id: suspension_id, response_data: Map.from_struct(response)}}
         )
 
       case directives do

@@ -154,7 +154,16 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
 
       {agent, directives} =
-        Strategy.cmd(agent, [make_instruction(:hitl_response, Map.from_struct(response))], %{})
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: Map.from_struct(response)
+            })
+          ],
+          %{}
+        )
 
       # Should now execute the tool and continue
       {agent, _} = execute_orchestrator(agent, directives)
@@ -192,7 +201,16 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
         )
 
       {agent, directives} =
-        Strategy.cmd(agent, [make_instruction(:hitl_response, Map.from_struct(response))], %{})
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: Map.from_struct(response)
+            })
+          ],
+          %{}
+        )
 
       # Should continue to LLM with synthetic rejection result
       {agent, _} = execute_orchestrator(agent, directives)
@@ -258,7 +276,16 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
 
       {agent, directives} =
-        Strategy.cmd(agent, [make_instruction(:hitl_response, Map.from_struct(response))], %{})
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: Map.from_struct(response)
+            })
+          ],
+          %{}
+        )
 
       {agent, _} = execute_orchestrator(agent, directives)
 
@@ -301,7 +328,16 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
         )
 
       {agent, _directives} =
-        Strategy.cmd(agent, [make_instruction(:hitl_response, Map.from_struct(response))], %{})
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: Map.from_struct(response)
+            })
+          ],
+          %{}
+        )
 
       strat = StratState.get(agent)
 
@@ -342,7 +378,16 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
         )
 
       {agent, _directives} =
-        Strategy.cmd(agent, [make_instruction(:hitl_response, Map.from_struct(response))], %{})
+        Strategy.cmd(
+          agent,
+          [
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: Map.from_struct(response)
+            })
+          ],
+          %{}
+        )
 
       strat = StratState.get(agent)
       assert strat.status == :error

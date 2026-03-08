@@ -320,9 +320,12 @@ defmodule Jido.Composer.Integration.PersistenceRuntimeTest do
         [{request_id, _}] = Map.to_list(restored_strat.approval_gate.gated_calls)
 
         approval_signal =
-          build_signal("composer.hitl.response", %{
-            request_id: request_id,
-            decision: :approved
+          build_signal("composer.suspend.resume", %{
+            suspension_id: request_id,
+            response_data: %{
+              request_id: request_id,
+              decision: :approved
+            }
           })
 
         {:ok, _} = Jido.AgentServer.call(pid2, approval_signal, 10_000)

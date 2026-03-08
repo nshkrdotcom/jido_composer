@@ -493,10 +493,13 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
         Strategy.cmd(
           agent,
           [
-            make_instruction(:hitl_response, %{
-              request_id: request_id,
-              decision: :rejected,
-              comment: "Not allowed"
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: %{
+                request_id: request_id,
+                decision: :rejected,
+                comment: "Not allowed"
+              }
             })
           ],
           ctx()
@@ -541,10 +544,13 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
         Strategy.cmd(
           agent,
           [
-            make_instruction(:hitl_response, %{
-              request_id: request_id,
-              decision: :rejected,
-              comment: "Denied"
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: %{
+                request_id: request_id,
+                decision: :rejected,
+                comment: "Denied"
+              }
             })
           ],
           ctx()
@@ -1154,9 +1160,12 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
         Strategy.cmd(
           agent,
           [
-            make_instruction(:hitl_response, %{
-              request_id: request_id,
-              decision: :approved
+            make_instruction(:suspend_resume, %{
+              suspension_id: request_id,
+              response_data: %{
+                request_id: request_id,
+                decision: :approved
+              }
             })
           ],
           ctx()

@@ -65,10 +65,8 @@ The Workflow Strategy declares the following signal routes:
 | `jido.agent.child.started`       | `{:strategy_cmd, :workflow_child_started}` | Child agent is ready                                                             |
 | `jido.agent.child.exit`          | `{:strategy_cmd, :workflow_child_exit}`    | Child agent terminated                                                           |
 | `composer.fan_out.branch_result` | `{:strategy_cmd, :fan_out_branch_result}`  | Result from a FanOut branch                                                      |
-| `composer.suspend.resume`        | `{:strategy_cmd, :suspend_resume}`         | Resume from any suspension                                                       |
+| `composer.suspend.resume`        | `{:strategy_cmd, :suspend_resume}`         | Resume from any suspension (including HITL approval)                             |
 | `composer.suspend.timeout`       | `{:strategy_cmd, :suspend_timeout}`        | Suspension timeout fired                                                         |
-| `composer.hitl.response`         | `{:strategy_cmd, :hitl_response}`          | Human decision (legacy alias)                                                    |
-| `composer.hitl.timeout`          | `{:strategy_cmd, :hitl_timeout}`           | HITL timeout (legacy alias)                                                      |
 | `composer.child.hibernated`      | `{:strategy_cmd, :child_hibernated}`       | Child agent [checkpointed](../hitl/persistence.md#cascading-checkpoint-protocol) |
 
 ## Command Actions

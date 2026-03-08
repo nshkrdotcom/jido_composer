@@ -186,12 +186,15 @@ IO.puts("Timeout:            #{suspension.timeout}ms")
 # Simulate a human approving the deployment
 {resumed_agent, resume_directives} =
   Demo.DeployWorkflow.cmd(suspended_agent, {
-    :hitl_response,
+    :suspend_resume,
     %{
-      request_id: suspension.approval_request.id,
-      decision: :approved,
-      respondent: "alice@acme.com",
-      comment: "Looks good, ship it!"
+      suspension_id: suspension.id,
+      response_data: %{
+        request_id: suspension.approval_request.id,
+        decision: :approved,
+        respondent: "alice@acme.com",
+        comment: "Looks good, ship it!"
+      }
     }
   })
 

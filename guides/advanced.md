@@ -135,7 +135,13 @@ To resume:
   comment: "Ship it!"
 )
 
-{agent, directives} = MyWorkflow.cmd(agent, {:hitl_response, Map.from_struct(response)})
+# Resume via the generalized suspend_resume command
+suspension_id = pending_suspension.id
+
+{agent, directives} = MyWorkflow.cmd(agent, {
+  :suspend_resume,
+  %{suspension_id: suspension_id, response_data: Map.from_struct(response)}
+})
 ```
 
 ### In Orchestrators: Tool Approval Gates
