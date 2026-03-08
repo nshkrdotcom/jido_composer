@@ -11,10 +11,11 @@ defmodule Jido.Composer.Workflow.Strategy do
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.Composer.Checkpoint
-  alias Jido.Composer.ChildRef
+  alias Jido.Composer.Children
   alias Jido.Composer.Context
   alias Jido.Composer.Directive.FanOutBranch
   alias Jido.Composer.Directive.Suspend, as: SuspendDirective
+  alias Jido.Composer.FanOut.State, as: FanOutState
   alias Jido.Composer.Directive.SuspendForHuman
   alias Jido.Composer.HITL.{ApprovalRequest, ApprovalResponse}
   alias Jido.Composer.Node.ActionNode
@@ -58,11 +59,10 @@ defmodule Jido.Composer.Workflow.Strategy do
         pending_child: nil,
         child_request_id: nil,
         pending_suspension: nil,
-        pending_fan_out: nil,
+        fan_out: nil,
         ambient_keys: opts[:ambient] || [],
         fork_fns: opts[:fork_fns] || %{},
-        children: %{},
-        child_phases: %{},
+        children: Children.new(),
         hibernate_after: opts[:hibernate_after],
         agent_id: agent.id,
         agent_module: ctx[:agent_module]
@@ -129,21 +129,15 @@ defmodule Jido.Composer.Workflow.Strategy do
     params = instr.params
     tag = params[:tag]
 
-    child_ref =
-      ChildRef.new(
-        agent_module: params[:agent_module],
-        agent_id: params[:agent_id],
-        tag: tag,
-        status: :running,
-        phase: :awaiting_result
-      )
-
     agent =
       StratState.update(agent, fn s ->
         %{
           s
-          | children: Map.put(s.children, tag, child_ref),
-            child_phases: Map.put(Map.get(s, :child_phases, %{}), tag, :awaiting_result)
+          | children:
+              Children.register_started(s.children, tag,
+                agent_module: params[:agent_module],
+                agent_id: params[:agent_id]
+              )
         }
       end)
 
@@ -157,17 +151,7 @@ defmodule Jido.Composer.Workflow.Strategy do
 
     agent =
       StratState.update(agent, fn s ->
-        new_children =
-          case Map.get(s.children, tag) do
-            nil -> s.children
-            ref -> Map.put(s.children, tag, %{ref | phase: nil})
-          end
-
-        %{
-          s
-          | children: new_children,
-            child_phases: Map.delete(Map.get(s, :child_phases, %{}), tag)
-        }
+        %{s | children: Children.record_result(s.children, tag)}
       end)
 
     case params do
@@ -201,16 +185,10 @@ defmodule Jido.Composer.Workflow.Strategy do
   def cmd(agent, [%Jido.Instruction{action: :workflow_child_exit} = instr | _rest], _ctx) do
     params = instr.params
     tag = params[:tag]
-    exit_status = if params[:reason] == :normal, do: :completed, else: :failed
 
     agent =
       StratState.update(agent, fn s ->
-        children =
-          Map.update(s.children, tag, nil, fn ref ->
-            %{ref | status: exit_status}
-          end)
-
-        %{s | children: children}
+        %{s | children: Children.record_exit(s.children, tag, params[:reason])}
       end)
 
     {agent, []}
@@ -221,7 +199,7 @@ defmodule Jido.Composer.Workflow.Strategy do
     params = instr.params
     branch_name = params[:branch_name]
     result = params[:result]
-    fan_out = strat.pending_fan_out
+    fan_out = strat.fan_out
 
     if is_nil(fan_out) do
       {agent, []}
@@ -394,17 +372,16 @@ defmodule Jido.Composer.Workflow.Strategy do
 
     agent =
       StratState.update(agent, fn s ->
-        children =
-          Map.update(s.children, tag, nil, fn ref ->
-            %{
-              ref
-              | status: :paused,
-                checkpoint_key: params[:checkpoint_key],
-                suspension_id: params[:suspension_id]
-            }
-          end)
-
-        %{s | children: children}
+        %{
+          s
+          | children:
+              Children.record_hibernation(
+                s.children,
+                tag,
+                params[:checkpoint_key],
+                params[:suspension_id]
+              )
+        }
       end)
 
     {agent, []}
@@ -463,10 +440,10 @@ defmodule Jido.Composer.Workflow.Strategy do
       end
 
     details =
-      case Map.get(strat, :pending_fan_out) do
+      case Map.get(strat, :fan_out) do
         %{suspended_branches: branches} when is_map(branches) and branches != %{} ->
           completed_count =
-            case Map.get(strat, :pending_fan_out) do
+            case Map.get(strat, :fan_out) do
               %{completed_results: cr} -> map_size(cr)
               _ -> 0
             end
@@ -540,7 +517,7 @@ defmodule Jido.Composer.Workflow.Strategy do
 
         agent =
           StratState.update(agent, fn s ->
-            %{s | child_phases: Map.put(s.child_phases, tag, :spawning)}
+            %{s | children: Children.set_phase(s.children, tag, :spawning)}
           end)
 
         directive = %Directive.SpawnAgent{
@@ -762,26 +739,16 @@ defmodule Jido.Composer.Workflow.Strategy do
 
   # -- FanOut helpers --
 
-  defp handle_fan_out_branch_result(agent, fan_out, branch_name, result, strat) do
+  defp handle_fan_out_branch_result(agent, fan_out, branch_name, result, _strat) do
     case result do
       {:ok, branch_result} ->
-        completed = Map.put(fan_out.completed_results, branch_name, branch_result)
-
-        pending =
-          fan_out.pending_branches
-          |> MapSet.delete(branch_name)
-
-        fan_out = %{fan_out | completed_results: completed, pending_branches: pending}
-
-        {fan_out, new_directives} = dispatch_queued_branches(fan_out, strat)
-
-        agent =
-          StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out} end)
-
+        fan_out = FanOutState.branch_completed(fan_out, branch_name, branch_result)
+        {fan_out, new_directives} = dispatch_queued_branches(fan_out)
+        agent = StratState.update(agent, fn s -> %{s | fan_out: fan_out} end)
         maybe_complete_fan_out(agent, new_directives)
 
       {:suspend, %Suspension{} = suspension} ->
-        handle_fan_out_branch_suspend(agent, fan_out, branch_name, suspension, nil, strat)
+        handle_fan_out_branch_suspend(agent, fan_out, branch_name, suspension, nil, nil)
 
       {:suspend, %Suspension{} = suspension, partial_result} ->
         handle_fan_out_branch_suspend(
@@ -790,7 +757,7 @@ defmodule Jido.Composer.Workflow.Strategy do
           branch_name,
           suspension,
           partial_result,
-          strat
+          nil
         )
 
       {:error, reason} ->
@@ -799,19 +766,9 @@ defmodule Jido.Composer.Workflow.Strategy do
             cancel_and_fail(agent, fan_out, reason)
 
           :collect_partial ->
-            completed = Map.put(fan_out.completed_results, branch_name, {:error, reason})
-
-            pending =
-              fan_out.pending_branches
-              |> MapSet.delete(branch_name)
-
-            fan_out = %{fan_out | completed_results: completed, pending_branches: pending}
-
-            {fan_out, new_directives} = dispatch_queued_branches(fan_out, strat)
-
-            agent =
-              StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out} end)
-
+            fan_out = FanOutState.branch_error(fan_out, branch_name, reason)
+            {fan_out, new_directives} = dispatch_queued_branches(fan_out)
+            agent = StratState.update(agent, fn s -> %{s | fan_out: fan_out} end)
             maybe_complete_fan_out(agent, new_directives)
         end
     end
@@ -823,20 +780,12 @@ defmodule Jido.Composer.Workflow.Strategy do
          branch_name,
          suspension,
          partial_result,
-         strat
+         _strat
        ) do
-    pending = MapSet.delete(fan_out.pending_branches, branch_name)
+    fan_out = FanOutState.branch_suspended(fan_out, branch_name, suspension, partial_result)
+    {fan_out, new_directives} = dispatch_queued_branches(fan_out)
 
-    suspended =
-      Map.put(fan_out.suspended_branches, branch_name, %{
-        suspension: suspension,
-        partial_result: partial_result
-      })
-
-    fan_out = %{fan_out | pending_branches: pending, suspended_branches: suspended}
-    {fan_out, new_directives} = dispatch_queued_branches(fan_out, strat)
-
-    agent = StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out} end)
+    agent = StratState.update(agent, fn s -> %{s | fan_out: fan_out} end)
     maybe_complete_fan_out(agent, new_directives)
   end
 
@@ -855,19 +804,10 @@ defmodule Jido.Composer.Workflow.Strategy do
 
     dispatched_names = Enum.map(to_dispatch, fn {name, _} -> name end) |> MapSet.new()
 
-    fan_out_state = %{
-      id: fan_out_id,
-      node: fan_out_node,
-      pending_branches: dispatched_names,
-      completed_results: %{},
-      suspended_branches: %{},
-      queued_branches: to_queue,
-      merge: fan_out_node.merge,
-      on_error: fan_out_node.on_error
-    }
+    fan_out_state = FanOutState.new(fan_out_id, fan_out_node, dispatched_names, to_queue)
 
     agent =
-      StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out_state} end)
+      StratState.update(agent, fn s -> %{s | fan_out: fan_out_state} end)
 
     directives = Enum.map(to_dispatch, fn {_name, directive} -> directive end)
     {agent, directives}
@@ -910,39 +850,22 @@ defmodule Jido.Composer.Workflow.Strategy do
     end
   end
 
-  defp dispatch_queued_branches(fan_out, _strat) when fan_out.queued_branches == [],
-    do: {fan_out, []}
-
-  defp dispatch_queued_branches(fan_out, _strat) do
-    max =
-      (fan_out.node.max_concurrency || length(fan_out.node.branches)) -
-        MapSet.size(fan_out.pending_branches)
-
-    if max <= 0 do
-      {fan_out, []}
-    else
-      {to_dispatch, remaining} = Enum.split(fan_out.queued_branches, max)
-      new_pending_names = Enum.map(to_dispatch, fn {name, _} -> name end)
-      pending = Enum.reduce(new_pending_names, fan_out.pending_branches, &MapSet.put(&2, &1))
-      directives = Enum.map(to_dispatch, fn {_name, directive} -> directive end)
-      fan_out = %{fan_out | pending_branches: pending, queued_branches: remaining}
-      {fan_out, directives}
-    end
+  defp dispatch_queued_branches(fan_out) do
+    {fan_out, to_dispatch} = FanOutState.drain_queue(fan_out)
+    directives = Enum.map(to_dispatch, fn {_name, directive} -> directive end)
+    {fan_out, directives}
   end
 
   defp maybe_complete_fan_out(agent, extra_directives) do
     strat = StratState.get(agent)
-    fan_out = strat.pending_fan_out
+    fan_out = strat.fan_out
 
-    cond do
-      # All done, no suspensions -> merge & transition
-      MapSet.size(fan_out.pending_branches) == 0 and
-        fan_out.queued_branches == [] and
-          fan_out.suspended_branches == %{} ->
-        merged = FanOutNode.merge_results(fan_out.completed_results, fan_out.merge)
+    case FanOutState.completion_status(fan_out) do
+      :all_done ->
+        merged = FanOutState.merge_results(fan_out)
         machine = Machine.apply_result(strat.machine, merged)
 
-        agent = StratState.update(agent, fn s -> %{s | pending_fan_out: nil} end)
+        agent = StratState.update(agent, fn s -> %{s | fan_out: nil} end)
 
         case Machine.transition(machine, :ok) do
           {:ok, machine} ->
@@ -955,10 +878,7 @@ defmodule Jido.Composer.Workflow.Strategy do
             {agent, []}
         end
 
-      # All running done, suspensions remain -> emit Suspend directives
-      MapSet.size(fan_out.pending_branches) == 0 and
-        fan_out.queued_branches == [] and
-          fan_out.suspended_branches != %{} ->
+      :suspended ->
         suspend_directives =
           Enum.map(fan_out.suspended_branches, fn {_branch_name, %{suspension: sus}} ->
             %SuspendDirective{suspension: sus}
@@ -972,32 +892,24 @@ defmodule Jido.Composer.Workflow.Strategy do
 
         {agent, all_directives}
 
-      # Still running -> pass through
-      true ->
+      :in_progress ->
         {agent, extra_directives}
     end
   end
 
   defp has_suspended_fan_out_branch?(strat, suspension_id) do
-    case strat.pending_fan_out do
-      %{suspended_branches: branches} when is_map(branches) and branches != %{} ->
-        Enum.any?(branches, fn {_name, %{suspension: %Suspension{id: id}}} ->
-          id == suspension_id
-        end)
-
-      _ ->
-        false
+    case strat.fan_out do
+      %FanOutState{} = fan_out -> FanOutState.has_suspended_branch?(fan_out, suspension_id)
+      _ -> false
     end
   end
 
   defp find_suspended_fan_out_branch(fan_out, suspension_id) do
-    Enum.find(fan_out.suspended_branches, fn {_name, %{suspension: %Suspension{id: id}}} ->
-      id == suspension_id
-    end)
+    FanOutState.find_suspended_branch(fan_out, suspension_id)
   end
 
   defp handle_fan_out_branch_resume(agent, strat, suspension_id, params) do
-    fan_out = strat.pending_fan_out
+    fan_out = strat.fan_out
     {branch_name, _branch_data} = find_suspended_fan_out_branch(fan_out, suspension_id)
     outcome = params[:outcome] || :ok
     data = params[:data] || %{}
@@ -1011,20 +923,17 @@ defmodule Jido.Composer.Workflow.Strategy do
   end
 
   defp complete_suspended_fan_out_branch(agent, fan_out, branch_name, result) do
-    fan_out = %{
-      fan_out
-      | suspended_branches: Map.delete(fan_out.suspended_branches, branch_name)
-    }
+    fan_out = FanOutState.resume_branch(fan_out, branch_name)
 
     agent =
-      StratState.update(agent, fn s -> %{s | pending_fan_out: fan_out, status: :running} end)
+      StratState.update(agent, fn s -> %{s | fan_out: fan_out, status: :running} end)
 
     strat = StratState.get(agent)
-    handle_fan_out_branch_result(agent, strat.pending_fan_out, branch_name, result, strat)
+    handle_fan_out_branch_result(agent, strat.fan_out, branch_name, result, strat)
   end
 
   defp handle_fan_out_branch_timeout(agent, strat, suspension_id) do
-    fan_out = strat.pending_fan_out
+    fan_out = strat.fan_out
     {branch_name, _} = find_suspended_fan_out_branch(fan_out, suspension_id)
     complete_suspended_fan_out_branch(agent, fan_out, branch_name, {:error, :suspension_timeout})
   end
@@ -1037,7 +946,7 @@ defmodule Jido.Composer.Workflow.Strategy do
         Directive.stop_child({:fan_out, fan_out.id, branch_name})
       end)
 
-    agent = StratState.update(agent, fn s -> %{s | pending_fan_out: nil} end)
+    agent = StratState.update(agent, fn s -> %{s | fan_out: nil} end)
     strat = StratState.get(agent)
 
     case Machine.transition(strat.machine, :error) do

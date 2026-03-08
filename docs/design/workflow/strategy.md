@@ -9,16 +9,15 @@ emitting [directives](../glossary.md#directive) for all side effects.
 The strategy stores its state under `agent.state.__strategy__` with the
 following structure:
 
-| Field                | Type                     | Purpose                                                                                                            |
-| -------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `machine`            | `Machine.t()`            | The FSM being driven                                                                                               |
-| `module`             | module                   | Strategy module reference                                                                                          |
-| `pending_child`      | `nil \| {tag, node}`     | Tracks in-flight AgentNode execution                                                                               |
-| `child_request_id`   | `nil \| String.t()`      | Correlation ID for child agent communication                                                                       |
-| `pending_suspension` | `nil \| Suspension.t()`  | Tracks any active [suspension](../hitl/README.md)                                                                  |
-| `pending_fan_out`    | `nil \| fan_out_state`   | Tracks in-flight [FanOutNode](#execution-flow-fanoutnode) branches                                                 |
-| `children`           | `%{tag => ChildRef.t()}` | Serializable [child references](../hitl/persistence.md#childref-serializable-child-references) for checkpoint/thaw |
-| `child_phases`       | `%{tag => atom}`         | [Phase tracking](../hitl/persistence.md#handling-in-flight-operations) for resume replay                           |
+| Field                | Type                      | Purpose                                                                                                                                                     |
+| -------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `machine`            | `Machine.t()`             | The FSM being driven                                                                                                                                        |
+| `module`             | module                    | Strategy module reference                                                                                                                                   |
+| `pending_child`      | `nil \| {tag, node}`      | Tracks in-flight AgentNode execution                                                                                                                        |
+| `child_request_id`   | `nil \| String.t()`       | Correlation ID for child agent communication                                                                                                                |
+| `pending_suspension` | `nil \| Suspension.t()`   | Tracks any active [suspension](../hitl/README.md)                                                                                                           |
+| `fan_out`            | `nil \| FanOut.State.t()` | Tracks in-flight [FanOutNode](#execution-flow-fanoutnode) branches via `Jido.Composer.FanOut.State`                                                         |
+| `children`           | `Children.t()`            | Serializable [child references](../hitl/persistence.md#childref-serializable-child-references) and lifecycle phases (`refs` + `phases`) for checkpoint/thaw |
 
 ## Lifecycle
 
@@ -193,7 +192,7 @@ The strategy tracks fan-out state:
 | `on_error`           | Error policy (`:fail_fast` or `:collect_partial`) |
 
 When all branches complete, results are merged and the FSM transitions. The
-strategy clears its `pending_fan_out` state.
+strategy clears its `fan_out` state.
 
 For ActionNode branches, the strategy emits a RunInstruction directive. For
 AgentNode branches, the strategy emits a SpawnAgent directive with

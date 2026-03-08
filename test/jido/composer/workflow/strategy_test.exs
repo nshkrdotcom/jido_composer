@@ -590,8 +590,8 @@ defmodule Jido.Composer.Workflow.StrategyTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.pending_fan_out != nil
-      assert strat.pending_fan_out.completed_results[:add] == %{result: 3.0}
+      assert strat.fan_out != nil
+      assert strat.fan_out.completed_results[:add] == %{result: 3.0}
     end
 
     test "fan_out completes when all branches done (merge + transition)" do
@@ -625,7 +625,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
       # Should have transitioned to terminal state
       strat = StratState.get(agent)
       assert strat.machine.status == :done
-      assert strat.pending_fan_out == nil
+      assert strat.fan_out == nil
       assert directives == []
 
       # Results should be merged and scoped under :compute
@@ -682,7 +682,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       strat = StratState.get(agent)
       assert strat.machine.status == :failed
-      assert strat.pending_fan_out == nil
+      assert strat.fan_out == nil
 
       # Directives may include StopChild for remaining pending branches
       assert is_list(directives)
@@ -706,8 +706,8 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       strat = StratState.get(agent)
       # Still pending, not failed
-      assert strat.pending_fan_out != nil
-      assert strat.pending_fan_out.completed_results[:add] == {:error, "add failed"}
+      assert strat.fan_out != nil
+      assert strat.fan_out.completed_results[:add] == {:error, "add failed"}
 
       # Feed success for second branch — should complete
       {agent, _} =
@@ -724,7 +724,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       strat = StratState.get(agent)
       assert strat.machine.status == :done
-      assert strat.pending_fan_out == nil
+      assert strat.fan_out == nil
     end
 
     test "max_concurrency limits dispatch" do
@@ -771,7 +771,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       # 1 branch queued
       strat = StratState.get(agent)
-      assert length(strat.pending_fan_out.queued_branches) == 1
+      assert length(strat.fan_out.queued_branches) == 1
     end
 
     test "queued branches dispatch as slots open" do
@@ -831,7 +831,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
       assert [%FanOutBranch{branch_name: :c}] = new_directives
 
       strat = StratState.get(agent)
-      assert strat.pending_fan_out.queued_branches == []
+      assert strat.fan_out.queued_branches == []
     end
   end
 
@@ -1355,9 +1355,9 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       # Still pending — waiting for third branch
       strat = StratState.get(agent)
-      assert strat.pending_fan_out != nil
-      assert strat.pending_fan_out.completed_results[:ok] == %{result: 3.0}
-      assert strat.pending_fan_out.completed_results[:fail] == {:error, "intentional failure"}
+      assert strat.fan_out != nil
+      assert strat.fan_out.completed_results[:ok] == %{result: 3.0}
+      assert strat.fan_out.completed_results[:fail] == {:error, "intentional failure"}
 
       # Feed: third branch OK — should complete
       {agent, _} =
@@ -1374,7 +1374,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       strat = StratState.get(agent)
       assert strat.machine.status == :done
-      assert strat.pending_fan_out == nil
+      assert strat.fan_out == nil
 
       # Error branch result preserved in merged context
       ctx_working = strat.machine.context.working
@@ -1455,7 +1455,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
         )
 
       strat = StratState.get(agent)
-      fan_out = strat.pending_fan_out
+      fan_out = strat.fan_out
       refute MapSet.member?(fan_out.pending_branches, :add)
       assert Map.has_key?(fan_out.suspended_branches, :add)
       assert fan_out.suspended_branches[:add].suspension == suspension
@@ -1480,7 +1480,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
         )
 
       strat = StratState.get(agent)
-      fan_out = strat.pending_fan_out
+      fan_out = strat.fan_out
       assert fan_out.suspended_branches[:add].suspension == suspension
       assert fan_out.suspended_branches[:add].partial_result == partial
     end
@@ -1520,7 +1520,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       strat = StratState.get(agent)
       assert strat.status == :waiting
-      assert strat.pending_fan_out != nil
+      assert strat.fan_out != nil
     end
 
     test "all branches suspend emits multiple Suspend directives" do
@@ -1608,7 +1608,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       strat = StratState.get(agent)
       assert strat.machine.status == :done
-      assert strat.pending_fan_out == nil
+      assert strat.fan_out == nil
       assert strat.machine.context.working[:compute][:add][:result] == 3.0
       assert strat.machine.context.working[:compute][:echo][:echoed] == "hi"
     end
@@ -1658,7 +1658,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       strat = StratState.get(agent)
       assert strat.status == :waiting
-      assert strat.pending_fan_out != nil
+      assert strat.fan_out != nil
 
       # Resume second — workflow should complete
       {agent, _} =
@@ -1675,7 +1675,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       strat = StratState.get(agent)
       assert strat.machine.status == :done
-      assert strat.pending_fan_out == nil
+      assert strat.fan_out == nil
     end
 
     test "resume with mismatched suspension_id returns error" do
@@ -1773,7 +1773,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
 
       strat = StratState.get(agent)
       assert strat.machine.status == :done
-      assert strat.pending_fan_out == nil
+      assert strat.fan_out == nil
       # Timeout result stored as error
       assert strat.machine.context.working[:compute][:add] == {:error, :suspension_timeout}
       assert strat.machine.context.working[:compute][:echo][:echoed] == "hi"
@@ -1848,7 +1848,7 @@ defmodule Jido.Composer.Workflow.StrategyTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.pending_fan_out == nil
+      assert strat.fan_out == nil
       assert strat.machine.status == :failed
     end
 

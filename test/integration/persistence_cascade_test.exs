@@ -18,6 +18,7 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
   alias Jido.AgentServer.DirectiveExec
   alias Jido.AgentServer.ParentRef
   alias Jido.Composer.Checkpoint
+  alias Jido.Composer.Children
   alias Jido.Composer.ChildRef
   alias Jido.Composer.Context
   alias Jido.Composer.Directive.CheckpointAndStop
@@ -232,16 +233,16 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
   # ══════════════════════════════════════════════════════════════
 
   describe "orchestrator child_phases tracking" do
-    test "both workflow and orchestrator strategies initialize child_phases" do
+    test "both workflow and orchestrator strategies initialize children" do
       wf_agent = OuterWorkflowWithOrchestrator.new()
       wf_strat = StratState.get(wf_agent)
-      assert Map.has_key?(wf_strat, :child_phases)
-      assert wf_strat.child_phases == %{}
+      assert %Children{} = wf_strat.children
+      assert wf_strat.children.phases == %{}
 
       orch_agent = init_orchestrator_agent()
       orch_strat = StratState.get(orch_agent)
-      assert Map.has_key?(orch_strat, :child_phases)
-      assert orch_strat.child_phases == %{}
+      assert %Children{} = orch_strat.children
+      assert orch_strat.children.phases == %{}
     end
 
     test "orchestrator child_started sets phase to :awaiting_result" do
@@ -265,7 +266,7 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.child_phases[:test_child] == :awaiting_result
+      assert strat.children.phases[:test_child] == :awaiting_result
     end
 
     test "orchestrator child_result clears phase" do
@@ -291,7 +292,7 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.child_phases[tag] == :awaiting_result
+      assert strat.children.phases[tag] == :awaiting_result
 
       {agent, _} =
         OrchStrategy.cmd(
@@ -306,7 +307,7 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
         )
 
       strat = StratState.get(agent)
-      refute Map.has_key?(strat.child_phases, tag)
+      refute Map.has_key?(strat.children.phases, tag)
     end
 
     test "child_phases survives checkpoint/thaw" do
@@ -332,10 +333,10 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.child_phases[tag] == :awaiting_result
+      assert strat.children.phases[tag] == :awaiting_result
 
       restored = checkpoint_and_thaw(strat)
-      assert restored.child_phases[tag] == :awaiting_result
+      assert restored.children.phases[tag] == :awaiting_result
     end
   end
 
@@ -382,10 +383,10 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
       # Verify restored state
       restored = StratState.get(restored_agent)
       assert restored.status == :awaiting_approval
-      assert map_size(restored.gated_calls) == 1
+      assert map_size(restored.approval_gate.gated_calls) == 1
 
       # Resume with approval
-      [{request_id, _}] = Map.to_list(restored.gated_calls)
+      [{request_id, _}] = Map.to_list(restored.approval_gate.gated_calls)
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
 
       LLMStub.setup([{:final_answer, "Echo result received"}])
@@ -428,7 +429,7 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
       restored = StratState.get(restored_agent)
 
       assert restored.status == :awaiting_approval
-      assert map_size(restored.gated_calls) > 0
+      assert map_size(restored.approval_gate.gated_calls) > 0
       assert restored.conversation != nil
     end
   end
@@ -503,18 +504,20 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
         status: :running,
         machine: %{status: :analyze, context: %{gather: %{tag: "test"}}},
         pending_suspension: nil,
-        pending_fan_out: nil,
-        children: %{{:tool_call, "tc-1", "inner_orchestrator"} => child_ref},
-        child_phases: %{{:tool_call, "tc-1", "inner_orchestrator"} => :awaiting_result}
+        fan_out: nil,
+        children: %Children{
+          refs: %{{:tool_call, "tc-1", "inner_orchestrator"} => child_ref},
+          phases: %{{:tool_call, "tc-1", "inner_orchestrator"} => :awaiting_result}
+        }
       }
 
       restored = checkpoint_and_thaw(parent_strat)
 
       tag = {:tool_call, "tc-1", "inner_orchestrator"}
-      assert Map.has_key?(restored.children, tag)
-      assert restored.children[tag].agent_module == InnerOrchestrator
-      assert restored.children[tag].status == :running
-      assert restored.child_phases[tag] == :awaiting_result
+      assert Map.has_key?(restored.children.refs, tag)
+      assert restored.children.refs[tag].agent_module == InnerOrchestrator
+      assert restored.children.refs[tag].status == :running
+      assert restored.children.phases[tag] == :awaiting_result
       assert Map.has_key?(child_ref, :phase)
     end
   end
@@ -527,15 +530,17 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
     test "replays LLM call for orchestrator in awaiting_llm state" do
       workflow_state = %{
         module: Jido.Composer.Workflow.Strategy,
-        children: %{
-          worker:
-            ChildRef.new(
-              agent_module: InnerOrchestrator,
-              agent_id: "w-child-1",
-              tag: :worker
-            )
-        },
-        child_phases: %{worker: :spawning}
+        children: %Children{
+          refs: %{
+            worker:
+              ChildRef.new(
+                agent_module: InnerOrchestrator,
+                agent_id: "w-child-1",
+                tag: :worker
+              )
+          },
+          phases: %{worker: :spawning}
+        }
       }
 
       wf_replays = Checkpoint.replay_directives(workflow_state)
@@ -643,7 +648,7 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
       assert ref_no_phase.phase == nil
     end
 
-    test "phase falls back from ChildRef when child_phases map is empty" do
+    test "phase falls back from ChildRef when phases map is empty" do
       tag = :worker
 
       child_ref =
@@ -656,18 +661,22 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
         )
 
       strat = %{
-        children: %{tag => child_ref},
-        child_phases: %{tag => :awaiting_result}
+        children: %Children{
+          refs: %{tag => child_ref},
+          phases: %{tag => :awaiting_result}
+        }
       }
 
-      assert strat.children[tag].phase == :awaiting_result
-      assert strat.child_phases[tag] == :awaiting_result
+      assert strat.children.refs[tag].phase == :awaiting_result
+      assert strat.children.phases[tag] == :awaiting_result
 
-      # Backward compat: empty child_phases falls back to ChildRef.phase
+      # Backward compat: empty phases falls back to ChildRef.phase
       restored = %{
         module: Jido.Composer.Workflow.Strategy,
-        children: %{tag => child_ref},
-        child_phases: %{}
+        children: %Children{
+          refs: %{tag => child_ref},
+          phases: %{}
+        }
       }
 
       # :awaiting_result doesn't generate a replay (only :spawning does)
@@ -679,8 +688,10 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
 
       restored_spawning = %{
         module: Jido.Composer.Workflow.Strategy,
-        children: %{tag => spawning_ref},
-        child_phases: %{}
+        children: %Children{
+          refs: %{tag => spawning_ref},
+          phases: %{}
+        }
       }
 
       replays = Checkpoint.replay_directives(restored_spawning)
@@ -971,15 +982,15 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
       # Now strategy has dispatched tool calls: noop ungated, echo gated
       strat = StratState.get(agent)
       assert strat.status == :awaiting_tools_and_approval
-      assert "call_noop" in strat.pending_tool_calls
-      assert map_size(strat.gated_calls) == 1
+      assert "call_noop" in strat.tool_concurrency.pending
+      assert map_size(strat.approval_gate.gated_calls) == 1
 
       # Checkpoint/thaw
       restored = checkpoint_and_thaw(strat)
 
       assert restored.status == :awaiting_tools_and_approval
-      assert "call_noop" in restored.pending_tool_calls
-      assert map_size(restored.gated_calls) == 1
+      assert "call_noop" in restored.tool_concurrency.pending
+      assert map_size(restored.approval_gate.gated_calls) == 1
     end
 
     test "replay_directives emits RunInstruction for ungated tools only" do
@@ -1180,7 +1191,7 @@ defmodule Jido.Composer.Integration.PersistenceCascadeTest do
 
       strat = StratState.get(agent)
       assert strat.suspended_calls == %{}
-      assert "call_1" in strat.pending_tool_calls
+      assert "call_1" in strat.tool_concurrency.pending
 
       # Should have a RunInstruction directive for re-dispatch
       assert length(directives) == 1

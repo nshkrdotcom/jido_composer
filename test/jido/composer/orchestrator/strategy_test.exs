@@ -60,8 +60,8 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert state.iteration == 0
       assert state.conversation == nil
       assert %Context{} = state.context
-      assert state.pending_tool_calls == []
-      assert state.completed_tool_results == []
+      assert state.tool_concurrency.pending == []
+      assert state.tool_concurrency.completed == []
       assert state.result == nil
     end
 
@@ -486,7 +486,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert state.status == :awaiting_approval
 
       # Find the request_id from gated_calls
-      [{request_id, _entry}] = Map.to_list(state.gated_calls)
+      [{request_id, _entry}] = Map.to_list(state.approval_gate.gated_calls)
 
       # Now reject the tool call
       {agent, _directives} =
@@ -505,7 +505,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       state = get_state(agent)
       # The rejection context should be scoped under the :add atom key (via scope_atom)
       assert %{add: %{error: "REJECTED: Not allowed"}} = state.context.working
-      assert state.gated_calls == %{}
+      assert state.approval_gate.gated_calls == %{}
     end
 
     test "rejection with cancel_siblings policy scopes context under tool atom" do
@@ -535,7 +535,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
         Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, llm_result)], ctx())
 
       state = get_state(agent)
-      [{request_id, _entry}] = Map.to_list(state.gated_calls)
+      [{request_id, _entry}] = Map.to_list(state.approval_gate.gated_calls)
 
       {agent, _directives} =
         Strategy.cmd(
@@ -552,7 +552,7 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
       state = get_state(agent)
       assert %{add: %{error: "REJECTED: Denied"}} = state.context.working
-      assert state.gated_calls == %{}
+      assert state.approval_gate.gated_calls == %{}
     end
   end
 
@@ -1033,8 +1033,8 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert hd(directives).meta.call_id == "call_1"
 
       state = get_state(agent)
-      assert state.pending_tool_calls == ["call_1"]
-      assert length(state.queued_tool_calls) == 2
+      assert state.tool_concurrency.pending == ["call_1"]
+      assert length(state.tool_concurrency.queued) == 2
     end
 
     test "queued calls dispatch as slots open" do
@@ -1079,8 +1079,8 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert d2.meta.call_id == "call_2"
 
       state = get_state(agent)
-      assert state.pending_tool_calls == ["call_2"]
-      assert length(state.queued_tool_calls) == 1
+      assert state.tool_concurrency.pending == ["call_2"]
+      assert length(state.tool_concurrency.queued) == 1
 
       # Complete second tool — should dispatch third from queue
       {agent, [d3]} =
@@ -1099,8 +1099,8 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert d3.meta.call_id == "call_3"
 
       state = get_state(agent)
-      assert state.pending_tool_calls == ["call_3"]
-      assert state.queued_tool_calls == []
+      assert state.tool_concurrency.pending == ["call_3"]
+      assert state.tool_concurrency.queued == []
 
       # Complete third tool — queue empty, all done, should trigger LLM call
       {agent, directives} =
@@ -1143,11 +1143,11 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
 
       state = get_state(agent)
       # echo dispatched, add gated
-      assert state.pending_tool_calls == ["call_1"]
-      assert state.queued_tool_calls == []
-      assert map_size(state.gated_calls) == 1
+      assert state.tool_concurrency.pending == ["call_1"]
+      assert state.tool_concurrency.queued == []
+      assert map_size(state.approval_gate.gated_calls) == 1
 
-      [{request_id, _entry}] = Map.to_list(state.gated_calls)
+      [{request_id, _entry}] = Map.to_list(state.approval_gate.gated_calls)
 
       # Approve the gated call while at capacity (1 pending, limit 1)
       {agent, approve_directives} =
@@ -1166,9 +1166,9 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert approve_directives == []
 
       state = get_state(agent)
-      assert state.gated_calls == %{}
-      assert length(state.queued_tool_calls) == 1
-      assert hd(state.queued_tool_calls).id == "call_2"
+      assert state.approval_gate.gated_calls == %{}
+      assert length(state.tool_concurrency.queued) == 1
+      assert hd(state.tool_concurrency.queued).id == "call_2"
     end
   end
 

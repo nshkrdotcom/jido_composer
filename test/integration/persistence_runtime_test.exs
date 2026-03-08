@@ -289,7 +289,7 @@ defmodule Jido.Composer.Integration.PersistenceRuntimeTest do
         {:ok, _} = Jido.AgentServer.call(pid, signal, 10_000)
 
         strat = await_status(pid, :awaiting_approval)
-        assert map_size(strat.gated_calls) == 1
+        assert map_size(strat.approval_gate.gated_calls) == 1
 
         # Hibernate to storage
         {:ok, live_state} = Jido.AgentServer.state(pid)
@@ -314,10 +314,10 @@ defmodule Jido.Composer.Integration.PersistenceRuntimeTest do
         # Verify restored state preserved by init
         restored_strat = get_strat(pid2)
         assert restored_strat.status == :awaiting_approval
-        assert map_size(restored_strat.gated_calls) == 1
+        assert map_size(restored_strat.approval_gate.gated_calls) == 1
 
         # Send approval
-        [{request_id, _}] = Map.to_list(restored_strat.gated_calls)
+        [{request_id, _}] = Map.to_list(restored_strat.approval_gate.gated_calls)
 
         approval_signal =
           build_signal("composer.hitl.response", %{
@@ -588,7 +588,7 @@ defmodule Jido.Composer.Integration.PersistenceRuntimeTest do
         assert restored_strat.status == :awaiting_approval
         assert restored_strat.iteration == original_iteration
         assert restored_strat.query == original_query
-        assert map_size(restored_strat.gated_calls) == 1
+        assert map_size(restored_strat.approval_gate.gated_calls) == 1
         assert restored_strat.conversation != nil
 
         # Verify runtime fields were rebuilt

@@ -271,7 +271,7 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
         status: :waiting,
         machine: %{status: :approval, context: %{data: "child-data"}},
         pending_suspension: %{id: "child-suspend-1", reason: :human_input},
-        pending_fan_out: nil
+        fan_out: nil
       }
 
       child_checkpoint = Checkpoint.prepare_for_checkpoint(child_strat)
@@ -293,7 +293,7 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
         status: :waiting,
         machine: %{status: :orchestrate, context: %{data: "parent-data"}},
         pending_suspension: nil,
-        pending_fan_out: nil,
+        fan_out: nil,
         children: %{etl_worker: child_ref}
       }
 
@@ -361,7 +361,7 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
         module: Jido.Composer.Workflow.Strategy,
         status: :running,
         machine: %{status: :parallel, context: %{}},
-        pending_fan_out: fan_out_state,
+        fan_out: fan_out_state,
         pending_suspension: nil
       }
 
@@ -369,8 +369,8 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
       binary = :erlang.term_to_binary(cleaned, [:compressed])
       restored = :erlang.binary_to_term(binary)
 
-      assert restored.pending_fan_out.completed_results == %{a: %{data: 1}, b: %{data: 2}}
-      assert MapSet.member?(restored.pending_fan_out.pending_branches, :c)
+      assert restored.fan_out.completed_results == %{a: %{data: 1}, b: %{data: 2}}
+      assert MapSet.member?(restored.fan_out.pending_branches, :c)
     end
 
     test "fan-out with queued branches survives checkpoint" do
@@ -388,7 +388,7 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
         module: Jido.Composer.Workflow.Strategy,
         status: :running,
         machine: %{status: :parallel, context: %{}},
-        pending_fan_out: fan_out_state,
+        fan_out: fan_out_state,
         pending_suspension: nil
       }
 
@@ -396,9 +396,9 @@ defmodule Jido.Composer.Integration.HITLPersistenceTest do
       binary = :erlang.term_to_binary(cleaned, [:compressed])
       restored = :erlang.binary_to_term(binary)
 
-      assert length(restored.pending_fan_out.queued_branches) == 1
-      assert restored.pending_fan_out.on_error == :collect_partial
-      assert MapSet.size(restored.pending_fan_out.pending_branches) == 2
+      assert length(restored.fan_out.queued_branches) == 1
+      assert restored.fan_out.on_error == :collect_partial
+      assert MapSet.size(restored.fan_out.pending_branches) == 2
     end
   end
 

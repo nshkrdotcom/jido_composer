@@ -1,0 +1,154 @@
+defmodule Jido.Composer.FanOut.State do
+  @moduledoc """
+  Typed sub-state for tracking FanOut branch execution.
+
+  Replaces the bare map `pending_fan_out` in Workflow Strategy.
+  Encapsulates branch completion, suspension, queueing, and merge logic.
+  """
+
+  alias Jido.Composer.Node.FanOutNode
+  alias Jido.Composer.Suspension
+
+  @derive Jason.Encoder
+
+  @enforce_keys [:id, :node]
+  defstruct [
+    :id,
+    :node,
+    pending_branches: MapSet.new(),
+    completed_results: %{},
+    suspended_branches: %{},
+    queued_branches: [],
+    merge: :deep_merge,
+    on_error: :fail_fast
+  ]
+
+  @type t :: %__MODULE__{
+          id: String.t(),
+          node: FanOutNode.t(),
+          pending_branches: MapSet.t(),
+          completed_results: %{atom() => term()},
+          suspended_branches: %{atom() => %{suspension: Suspension.t(), partial_result: term()}},
+          queued_branches: [{atom(), term()}],
+          merge: atom(),
+          on_error: :fail_fast | :collect_partial
+        }
+
+  @doc "Creates a new FanOut.State from dispatched and queued branches."
+  @spec new(String.t(), FanOutNode.t(), MapSet.t(), [{atom(), term()}]) :: t()
+  def new(id, fan_out_node, dispatched_names, queued_branches) do
+    %__MODULE__{
+      id: id,
+      node: fan_out_node,
+      pending_branches: dispatched_names,
+      completed_results: %{},
+      suspended_branches: %{},
+      queued_branches: queued_branches,
+      merge: fan_out_node.merge,
+      on_error: fan_out_node.on_error
+    }
+  end
+
+  @doc "Record a successful branch completion."
+  @spec branch_completed(t(), atom(), term()) :: t()
+  def branch_completed(%__MODULE__{} = state, branch_name, result) do
+    %{
+      state
+      | completed_results: Map.put(state.completed_results, branch_name, result),
+        pending_branches: MapSet.delete(state.pending_branches, branch_name)
+    }
+  end
+
+  @doc "Record a branch suspension."
+  @spec branch_suspended(t(), atom(), Suspension.t(), term()) :: t()
+  def branch_suspended(%__MODULE__{} = state, branch_name, suspension, partial_result) do
+    %{
+      state
+      | pending_branches: MapSet.delete(state.pending_branches, branch_name),
+        suspended_branches:
+          Map.put(state.suspended_branches, branch_name, %{
+            suspension: suspension,
+            partial_result: partial_result
+          })
+    }
+  end
+
+  @doc "Record a branch error (for :collect_partial mode)."
+  @spec branch_error(t(), atom(), term()) :: t()
+  def branch_error(%__MODULE__{} = state, branch_name, reason) do
+    %{
+      state
+      | completed_results: Map.put(state.completed_results, branch_name, {:error, reason}),
+        pending_branches: MapSet.delete(state.pending_branches, branch_name)
+    }
+  end
+
+  @doc """
+  Drain queued branches into available slots.
+  Returns `{updated_state, to_dispatch}` where `to_dispatch` is a list of
+  `{branch_name, directive}` tuples.
+  """
+  @spec drain_queue(t()) :: {t(), [{atom(), term()}]}
+  def drain_queue(%__MODULE__{queued_branches: []} = state), do: {state, []}
+
+  def drain_queue(%__MODULE__{} = state) do
+    max =
+      (state.node.max_concurrency || length(state.node.branches)) -
+        MapSet.size(state.pending_branches)
+
+    if max <= 0 do
+      {state, []}
+    else
+      {to_dispatch, remaining} = Enum.split(state.queued_branches, max)
+      new_pending_names = Enum.map(to_dispatch, fn {name, _} -> name end)
+
+      pending =
+        Enum.reduce(new_pending_names, state.pending_branches, &MapSet.put(&2, &1))
+
+      state = %{state | pending_branches: pending, queued_branches: remaining}
+      {state, to_dispatch}
+    end
+  end
+
+  @doc "Returns the completion status of the fan-out."
+  @spec completion_status(t()) :: :all_done | :suspended | :in_progress
+  def completion_status(%__MODULE__{} = state) do
+    no_pending = MapSet.size(state.pending_branches) == 0
+    no_queued = state.queued_branches == []
+    has_suspended = state.suspended_branches != %{}
+
+    cond do
+      no_pending and no_queued and not has_suspended -> :all_done
+      no_pending and no_queued and has_suspended -> :suspended
+      true -> :in_progress
+    end
+  end
+
+  @doc "Merge completed results using the configured merge strategy."
+  @spec merge_results(t()) :: map()
+  def merge_results(%__MODULE__{} = state) do
+    FanOutNode.merge_results(state.completed_results, state.merge)
+  end
+
+  @doc "Check if a suspended branch matches the given suspension_id."
+  @spec has_suspended_branch?(t(), String.t()) :: boolean()
+  def has_suspended_branch?(%__MODULE__{suspended_branches: branches}, suspension_id) do
+    Enum.any?(branches, fn {_name, %{suspension: %Suspension{id: id}}} ->
+      id == suspension_id
+    end)
+  end
+
+  @doc "Find a suspended branch by suspension_id."
+  @spec find_suspended_branch(t(), String.t()) :: {atom(), map()} | nil
+  def find_suspended_branch(%__MODULE__{suspended_branches: branches}, suspension_id) do
+    Enum.find(branches, fn {_name, %{suspension: %Suspension{id: id}}} ->
+      id == suspension_id
+    end)
+  end
+
+  @doc "Resume a suspended branch by removing it from suspended_branches."
+  @spec resume_branch(t(), atom()) :: t()
+  def resume_branch(%__MODULE__{} = state, branch_name) do
+    %{state | suspended_branches: Map.delete(state.suspended_branches, branch_name)}
+  end
+end

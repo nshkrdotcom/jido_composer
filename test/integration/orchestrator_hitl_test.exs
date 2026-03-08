@@ -128,7 +128,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
       strat = StratState.get(agent)
       assert strat.status == :awaiting_approval
-      assert map_size(strat.gated_calls) == 1
+      assert map_size(strat.approval_gate.gated_calls) == 1
     end
 
     test "approved gated tool call executes and continues" do
@@ -148,7 +148,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
       # Get the pending approval
       strat = StratState.get(agent)
-      [{request_id, _}] = Map.to_list(strat.gated_calls)
+      [{request_id, _}] = Map.to_list(strat.approval_gate.gated_calls)
 
       # Approve
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
@@ -181,7 +181,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       {agent, _remaining} = execute_orchestrator(agent, directives)
 
       strat = StratState.get(agent)
-      [{request_id, _}] = Map.to_list(strat.gated_calls)
+      [{request_id, _}] = Map.to_list(strat.approval_gate.gated_calls)
 
       # Reject
       {:ok, response} =
@@ -226,7 +226,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       assert strat.context.working[:echo][:echoed] == "hello"
 
       # Add is gated
-      assert map_size(strat.gated_calls) == 1
+      assert map_size(strat.approval_gate.gated_calls) == 1
       assert strat.status == :awaiting_approval
 
       # There should be a SuspendForHuman in remaining
@@ -253,7 +253,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
       # Approve the gated call
       strat = StratState.get(agent)
-      [{request_id, _}] = Map.to_list(strat.gated_calls)
+      [{request_id, _}] = Map.to_list(strat.approval_gate.gated_calls)
 
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
 
@@ -290,7 +290,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       {agent, _remaining} = execute_orchestrator(agent, directives)
 
       strat = StratState.get(agent)
-      [{request_id, _}] = Map.to_list(strat.gated_calls)
+      [{request_id, _}] = Map.to_list(strat.approval_gate.gated_calls)
 
       # Reject the gated call — should cancel siblings
       {:ok, response} =
@@ -307,11 +307,11 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
 
       # With cancel_siblings: pending tools should be cleared and
       # synthetic results generated for all
-      assert strat.pending_tool_calls == []
+      assert strat.tool_concurrency.pending == []
       # Should proceed to LLM with results (rejection + cancellation)
       assert strat.status == :awaiting_llm
       # Completed results should have entries for both tools
-      assert strat.completed_tool_results != []
+      assert strat.tool_concurrency.completed != []
     end
   end
 
@@ -332,7 +332,7 @@ defmodule Jido.Composer.Integration.OrchestratorHITLTest do
       {agent, _remaining} = execute_orchestrator(agent, directives)
 
       strat = StratState.get(agent)
-      [{request_id, _}] = Map.to_list(strat.gated_calls)
+      [{request_id, _}] = Map.to_list(strat.approval_gate.gated_calls)
 
       {:ok, response} =
         ApprovalResponse.new(

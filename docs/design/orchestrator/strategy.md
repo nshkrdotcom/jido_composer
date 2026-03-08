@@ -8,35 +8,33 @@ invocations, tool execution, and result accumulation.
 
 The strategy stores its state under `agent.state.__strategy__`:
 
-| Field                   | Type                        | Purpose                                                                                                                                   |
-| ----------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`                | atom                        | `:idle`, `:awaiting_llm`, `:awaiting_tools`, `:awaiting_suspension`, `:awaiting_tools_and_suspension`, `:completed`, `:error`             |
-| `phase`                 | atom                        | [Phase tracking](../hitl/persistence.md#handling-in-flight-operations) for resume replay (`:idle`, `:awaiting_llm`, `:dispatching_tools`) |
-| `nodes`                 | `%{String.t() => Node.t()}` | Available nodes indexed by name                                                                                                           |
-| `model`                 | `String.t()`                | req_llm model spec (e.g. `"anthropic:claude-sonnet-4-20250514"`)                                                                          |
-| `system_prompt`         | `String.t()`                | System instructions for the LLM                                                                                                           |
-| `temperature`           | `float \| nil`              | Sampling temperature                                                                                                                      |
-| `max_tokens`            | `integer \| nil`            | Maximum tokens in response                                                                                                                |
-| `stream`                | boolean                     | Whether to use streaming generation (default: `false`)                                                                                    |
-| `termination_tool_name` | `String.t() \| nil`         | Name of the [termination tool](#termination-tool) (derived from module)                                                                   |
-| `termination_tool_mod`  | module \| nil               | Action module for the [termination tool](#termination-tool)                                                                               |
-| `llm_opts`              | keyword                     | Additional options passed through to req_llm                                                                                              |
-| `conversation`          | `ReqLLM.Context.t()`        | Conversation history managed by req_llm                                                                                                   |
-| `tools`                 | `[ReqLLM.Tool.t()]`         | Tool descriptions as `ReqLLM.Tool` structs derived from nodes                                                                             |
-| `pending_tool_calls`    | `[tool_call]`               | In-flight tool executions                                                                                                                 |
-| `queued_tool_calls`     | `[tool_call]`               | Tool calls awaiting dispatch (backpressure)                                                                                               |
-| `suspended_calls`       | `%{id => suspended_call}`   | Tool calls [suspended](../hitl/strategy-integration.md) for non-HITL reasons (rate limit, async)                                          |
-| `max_tool_concurrency`  | integer \| `:infinity`      | Maximum simultaneous tool executions (default: `:infinity`)                                                                               |
-| `context`               | `Context.t()`               | Accumulated [context](../nodes/context-flow.md#context-layers) with ambient, working, and fork layers                                     |
-| `ambient_keys`          | `[atom()]`                  | Keys extracted from start params into the [ambient layer](../nodes/context-flow.md#ambient)                                               |
-| `iteration`             | integer                     | Current loop iteration                                                                                                                    |
-| `max_iterations`        | integer                     | Safety limit                                                                                                                              |
-| `req_options`           | keyword                     | Opaque HTTP options forwarded to [LLMAction](llm-integration.md)                                                                          |
-| `approval_policy`       | MFA \| nil                  | Dynamic [approval gate](../hitl/strategy-integration.md#orchestrator-approval-gate) function                                              |
-| `pending_suspension`    | `nil \| Suspension.t()`     | Tracks any active [suspension](../hitl/README.md)                                                                                         |
-| `children`              | `%{tag => ChildRef.t()}`    | Serializable [child references](../hitl/persistence.md#childref-serializable-child-references) for checkpoint/thaw                        |
-| `hibernate_after`       | `pos_integer() \| nil`      | Delay (ms) before [checkpoint](../hitl/persistence.md) on suspension                                                                      |
-| `result`                | any                         | Final answer when complete (may be [NodeIO](../nodes/typed-io.md))                                                                        |
+| Field                   | Type                        | Purpose                                                                                                                                                                                    |
+| ----------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `status`                | atom                        | `:idle`, `:awaiting_llm`, `:awaiting_tools`, `:awaiting_suspension`, `:awaiting_tools_and_suspension`, `:completed`, `:error`                                                              |
+| `phase`                 | atom                        | [Phase tracking](../hitl/persistence.md#handling-in-flight-operations) for resume replay (`:idle`, `:awaiting_llm`, `:dispatching_tools`). Tracked within `Children.t()` for child phases. |
+| `nodes`                 | `%{String.t() => Node.t()}` | Available nodes indexed by name                                                                                                                                                            |
+| `model`                 | `String.t()`                | req_llm model spec (e.g. `"anthropic:claude-sonnet-4-20250514"`)                                                                                                                           |
+| `system_prompt`         | `String.t()`                | System instructions for the LLM                                                                                                                                                            |
+| `temperature`           | `float \| nil`              | Sampling temperature                                                                                                                                                                       |
+| `max_tokens`            | `integer \| nil`            | Maximum tokens in response                                                                                                                                                                 |
+| `stream`                | boolean                     | Whether to use streaming generation (default: `false`)                                                                                                                                     |
+| `termination_tool_name` | `String.t() \| nil`         | Name of the [termination tool](#termination-tool) (derived from module)                                                                                                                    |
+| `termination_tool_mod`  | module \| nil               | Action module for the [termination tool](#termination-tool)                                                                                                                                |
+| `llm_opts`              | keyword                     | Additional options passed through to req_llm                                                                                                                                               |
+| `conversation`          | `ReqLLM.Context.t()`        | Conversation history managed by req_llm                                                                                                                                                    |
+| `tools`                 | `[ReqLLM.Tool.t()]`         | Tool descriptions as `ReqLLM.Tool` structs derived from nodes                                                                                                                              |
+| `tool_concurrency`      | `ToolConcurrency.t()`       | Tracks pending, completed, and queued tool calls with concurrency limits (see [Tool Concurrency](#tool-concurrency))                                                                       |
+| `suspended_calls`       | `%{id => suspended_call}`   | Tool calls [suspended](../hitl/strategy-integration.md) for non-HITL reasons (rate limit, async)                                                                                           |
+| `context`               | `Context.t()`               | Accumulated [context](../nodes/context-flow.md#context-layers) with ambient, working, and fork layers                                                                                      |
+| `ambient_keys`          | `[atom()]`                  | Keys extracted from start params into the [ambient layer](../nodes/context-flow.md#ambient)                                                                                                |
+| `iteration`             | integer                     | Current loop iteration                                                                                                                                                                     |
+| `max_iterations`        | integer                     | Safety limit                                                                                                                                                                               |
+| `req_options`           | keyword                     | Opaque HTTP options forwarded to [LLMAction](llm-integration.md)                                                                                                                           |
+| `approval_gate`         | `ApprovalGate.t()`          | Encapsulates gated node names, [approval policy](../hitl/strategy-integration.md#orchestrator-approval-gate), rejection policy, and pending gated calls                                    |
+| `pending_suspension`    | `nil \| Suspension.t()`     | Tracks any active [suspension](../hitl/README.md)                                                                                                                                          |
+| `children`              | `Children.t()`              | Serializable [child references](../hitl/persistence.md#childref-serializable-child-references) and lifecycle phases for checkpoint/thaw                                                    |
+| `hibernate_after`       | `pos_integer() \| nil`      | Delay (ms) before [checkpoint](../hitl/persistence.md) on suspension                                                                                                                       |
+| `result`                | any                         | Final answer when complete (may be [NodeIO](../nodes/typed-io.md))                                                                                                                         |
 
 ## Status Lifecycle
 
@@ -231,10 +229,15 @@ from the working layer).
 ## Tool Concurrency
 
 The Orchestrator can dispatch multiple tool calls in parallel when the LLM
-returns several in a single turn. A configurable `max_tool_concurrency` limit
-controls how many tool calls execute simultaneously. When more tool calls are
-returned than the limit allows, excess calls are queued and dispatched as
+returns several in a single turn. Tool concurrency state is encapsulated in
+a `ToolConcurrency` struct (`pending`, `completed`, `queued`, `max_concurrency`)
+managed via `Jido.Composer.ToolConcurrency`. A configurable `max_concurrency`
+limit controls how many tool calls execute simultaneously. When more tool calls
+are returned than the limit allows, excess calls are queued and dispatched as
 earlier ones complete.
+
+Status computation across tool concurrency, approval gate, and suspended calls
+is handled by `Jido.Composer.Orchestrator.StatusComputer.compute/3`.
 
 ## Tool Suspension
 
@@ -249,7 +252,7 @@ resource throttling). The strategy detects suspension through two paths:
 Both paths route to `handle_tool_suspension`, which:
 
 1. Extracts or builds a `Suspension` struct from the tool result
-2. Removes the call from `pending_tool_calls`
+2. Removes the call from `tool_concurrency.pending`
 3. Stores `%{suspension: suspension, call: call}` in `suspended_calls` keyed
    by `suspension.id`
 4. Emits a Suspend directive
@@ -337,9 +340,10 @@ The `init/2` callback supports two modes:
 | Restore    | Strategy state exists with matching module and non-idle status | Preserves checkpoint state; rebuilds runtime-derived fields only |
 
 Runtime-derived fields rebuilt during restore: `nodes`, `tools`, `name_atoms`,
-`gated_node_names`, `approval_policy`, `req_options`. All other fields
-(conversation, suspended_calls, pending_tool_calls, iteration, context, etc.)
-are preserved from the checkpoint.
+`approval_gate.gated_node_names`, `approval_gate.approval_policy`,
+`tool_concurrency.max_concurrency`, `req_options`. All other fields
+(conversation, suspended_calls, tool_concurrency, approval_gate.gated_calls,
+iteration, context, etc.) are preserved from the checkpoint.
 
 This enables the thaw-start-resume flow: an AgentServer starts with
 checkpointed state, `init/2` detects the restored state and avoids overwriting

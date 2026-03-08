@@ -37,7 +37,7 @@ defmodule Jido.Composer.CheckpointTest do
         status: :waiting,
         machine: machine,
         pending_suspension: %{id: "suspend-abc", reason: :human_input},
-        pending_fan_out: nil,
+        fan_out: nil,
         pending_child: nil,
         child_request_id: nil,
         ambient_keys: [:tenant_id],

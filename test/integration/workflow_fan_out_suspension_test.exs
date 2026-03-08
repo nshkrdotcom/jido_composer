@@ -28,7 +28,7 @@ defmodule Jido.Composer.Integration.WorkflowFanOutSuspensionTest do
       )
 
     use Jido.Composer.Workflow,
-      name: "suspending_fan_out",
+      name: "susfan_out",
       description: "FanOut with a branch that may suspend",
       nodes: %{compute: fan_out},
       transitions: %{
@@ -102,12 +102,12 @@ defmodule Jido.Composer.Integration.WorkflowFanOutSuspensionTest do
         # If suspend directives were emitted, we're in waiting state
         Enum.any?(directives, &match?(%SuspendDirective{}, &1)) ->
           assert strat.status == :waiting
-          assert strat.pending_fan_out != nil
-          assert map_size(strat.pending_fan_out.suspended_branches) == 1
+          assert strat.fan_out != nil
+          assert map_size(strat.fan_out.suspended_branches) == 1
 
           # Get the suspension id
           [{_branch, %{suspension: suspension}}] =
-            Enum.to_list(strat.pending_fan_out.suspended_branches)
+            Enum.to_list(strat.fan_out.suspended_branches)
 
           # Resume the suspended branch
           {agent, _} =
@@ -123,7 +123,7 @@ defmodule Jido.Composer.Integration.WorkflowFanOutSuspensionTest do
 
           strat = StratState.get(agent)
           assert strat.machine.status == :done
-          assert strat.pending_fan_out == nil
+          assert strat.fan_out == nil
 
         # Otherwise both completed normally (shouldn't happen with tokens=0)
         true ->
@@ -179,7 +179,7 @@ defmodule Jido.Composer.Integration.WorkflowFanOutSuspensionTest do
       assert %FanOutBranch{} = first_branch
 
       strat = StratState.get(agent)
-      assert length(strat.pending_fan_out.queued_branches) == 2
+      assert length(strat.fan_out.queued_branches) == 2
 
       # Execute first branch — it suspends, which frees the slot
       result = execute_fan_out_branch(first_branch)
@@ -242,7 +242,7 @@ defmodule Jido.Composer.Integration.WorkflowFanOutSuspensionTest do
 
       # Get suspension id and resume
       [{_branch_name, %{suspension: sus}}] =
-        Enum.to_list(strat.pending_fan_out.suspended_branches)
+        Enum.to_list(strat.fan_out.suspended_branches)
 
       {agent, _} =
         Strategy.cmd(
@@ -262,7 +262,7 @@ defmodule Jido.Composer.Integration.WorkflowFanOutSuspensionTest do
 
       strat = StratState.get(agent)
       assert strat.machine.status == :done
-      assert strat.pending_fan_out == nil
+      assert strat.fan_out == nil
     end
   end
 

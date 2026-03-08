@@ -312,7 +312,7 @@ defmodule Jido.Composer.Integration.HITLIntegrationTest do
       restored_agent = StratState.put(fresh_agent, restored)
 
       # Resume with approval
-      [{request_id, _}] = Map.to_list(restored.gated_calls)
+      [{request_id, _}] = Map.to_list(restored.approval_gate.gated_calls)
       {:ok, response} = ApprovalResponse.new(request_id: request_id, decision: :approved)
 
       # Need LLMStub setup for the final answer after tool execution

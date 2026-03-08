@@ -89,21 +89,20 @@ The entire agent state — including strategy state under `__strategy__` — is
 persisted via `Jido.Persist.hibernate/2`. The checkpoint captures the logical
 state of the computation at the moment of suspension.
 
-| Data                                        | Location                           | Serializable?                                                         |
-| ------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------- |
-| Machine status, context, history            | `__strategy__.machine`             | Yes (atoms, maps, timestamps)                                         |
-| Orchestrator conversation, tools, iteration | `__strategy__.*`                   | Yes (LLM module must ensure conversation state is serializable)       |
-| Pending Suspension                          | `__strategy__.pending_suspension`  | Yes (no PIDs, no closures)                                            |
-| FanOut state (completed + suspended)        | `__strategy__.pending_fan_out`     | Yes (results, branch names, Suspension structs)                       |
-| Child references                            | `__strategy__.children`            | Yes (ChildRef structs with status, checkpoint keys)                   |
-| Child communication phases                  | `__strategy__.child_phases`        | Yes (atoms)                                                           |
-| Fork functions                              | `Context.fork_fns`                 | Yes (MFA tuples by design)                                            |
-| Approval policy (closure)                   | Orchestrator state                 | **No** — stripped on checkpoint, reattached from DSL on restore       |
-| Execution thread                            | Stored separately via Thread       | Yes (append-only log)                                                 |
-| Gated tool calls                            | `__strategy__.gated_calls`         | Yes (tool call structs + approval requests)                           |
-| Suspended tool calls                        | `__strategy__.suspended_calls`     | Yes (suspension + tool call data)                                     |
-| Orchestrator status                         | `__strategy__.status`              | Yes (atom — includes `:awaiting_tools_and_approval` for mixed states) |
-| Child process PIDs                          | `__parent__`, AgentServer children | **No** — replaced by ChildRef                                         |
+| Data                                        | Location                           | Serializable?                                                           |
+| ------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------- |
+| Machine status, context, history            | `__strategy__.machine`             | Yes (atoms, maps, timestamps)                                           |
+| Orchestrator conversation, tools, iteration | `__strategy__.*`                   | Yes (LLM module must ensure conversation state is serializable)         |
+| Pending Suspension                          | `__strategy__.pending_suspension`  | Yes (no PIDs, no closures)                                              |
+| FanOut state (completed + suspended)        | `__strategy__.fan_out`             | Yes (`FanOut.State` struct — results, branch names, Suspension structs) |
+| Child references and phases                 | `__strategy__.children`            | Yes (`Children` struct with `refs` and `phases` maps)                   |
+| Fork functions                              | `Context.fork_fns`                 | Yes (MFA tuples by design)                                              |
+| Approval policy (closure)                   | Orchestrator state                 | **No** — stripped on checkpoint, reattached from DSL on restore         |
+| Execution thread                            | Stored separately via Thread       | Yes (append-only log)                                                   |
+| Gated tool calls                            | `__strategy__.approval_gate`       | Yes (`ApprovalGate` struct — gated calls + approval requests)           |
+| Suspended tool calls                        | `__strategy__.suspended_calls`     | Yes (suspension + tool call data)                                       |
+| Orchestrator status                         | `__strategy__.status`              | Yes (atom — includes `:awaiting_tools_and_approval` for mixed states)   |
+| Child process PIDs                          | `__parent__`, AgentServer children | **No** — replaced by ChildRef                                           |
 
 ## ParentRef PID Handling
 
@@ -153,8 +152,9 @@ A Composer checkpoint extends the base `Jido.Persist` format:
 | `children_checkpoints` | Composer     | Map of `tag => ChildRef` for nested children (with checkpoint keys) |
 
 The strategy state within the checkpoint includes `pending_suspension` (the
-active Suspension struct, if any) and `pending_fan_out` (completed + suspended
-branch state for in-progress fan-outs). Both are fully serializable.
+active Suspension struct, if any) and `fan_out` (a `FanOut.State` struct with
+completed + suspended branch state for in-progress fan-outs). Both are fully
+serializable.
 
 ## Serialization Format
 
@@ -310,12 +310,14 @@ replay on resume:
 in-flight operations from checkpoint state. It combines child phase replays
 with orchestrator operation replays into a single directive list.
 
-**Workflow replay** re-spawns children based on their `child_phases` map:
-`:spawning` entries produce `SpawnAgent` directives. For backward
-compatibility, if `child_phases` is empty, the function falls back to
-inspecting each `ChildRef.phase` field.
+**Workflow replay** re-spawns children based on their `children.phases` map
+(inside the `Children` struct): `:spawning` entries produce `SpawnAgent`
+directives. For backward compatibility, if `phases` is empty, the function
+falls back to inspecting each `ChildRef.phase` field.
 
-**Orchestrator replay** inspects the strategy status:
+**Orchestrator replay** delegates to `Orchestrator.Strategy.replay_directives_from_state/1`
+via `function_exported?/3`. This keeps replay logic co-located with the strategy
+that owns the state shape. It inspects the strategy status:
 
 | Status                         | Replay Behaviour                                               |
 | ------------------------------ | -------------------------------------------------------------- |
@@ -361,7 +363,9 @@ normal `emit_to_parent` mechanism.
 ## Closure Stripping
 
 Some strategy state fields contain closures that cannot be serialized (e.g.,
-`approval_policy` in the Orchestrator). On checkpoint, these are stripped (set
-to nil). On restore, they are reattached from the agent module's DSL
-configuration (`strategy_opts`). Convention: closures in strategy state must
-be re-derivable from module metadata.
+`approval_policy` inside the `ApprovalGate` struct in the Orchestrator). On
+checkpoint, top-level closures are stripped (set to nil). On restore, they are
+reattached from the agent module's DSL configuration (`strategy_opts`) —
+the strategy's `restore_runtime_fields` rebuilds `approval_gate.approval_policy`
+and `approval_gate.gated_node_names` from opts. Convention: closures in strategy
+state must be re-derivable from module metadata.

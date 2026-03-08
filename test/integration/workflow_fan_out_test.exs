@@ -379,9 +379,9 @@ defmodule Jido.Composer.Integration.WorkflowFanOutTest do
       assert length(directives) == 2
       assert Enum.all?(directives, &match?(%FanOutBranch{}, &1))
 
-      # Strategy has pending_fan_out state
+      # Strategy has fan_out state
       strat = StratState.get(agent)
-      assert strat.pending_fan_out != nil
+      assert strat.fan_out != nil
     end
 
     test "FanOutNode merged result is scoped under state name via run_sync" do

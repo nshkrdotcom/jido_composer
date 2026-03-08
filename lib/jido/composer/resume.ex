@@ -20,6 +20,7 @@ defmodule Jido.Composer.Resume do
 
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.Composer.Checkpoint
+  alias Jido.Composer.FanOut.State, as: FanOutState
   alias Jido.Composer.Suspension
 
   @spec resume(Jido.Agent.t() | nil, String.t(), map(), keyword()) ::
@@ -118,14 +119,9 @@ defmodule Jido.Composer.Resume do
   end
 
   defp has_suspended_fan_out_branch?(strat, suspension_id) do
-    case Map.get(strat, :pending_fan_out) do
-      %{suspended_branches: branches} when is_map(branches) and branches != %{} ->
-        Enum.any?(branches, fn {_name, %{suspension: %Suspension{id: id}}} ->
-          id == suspension_id
-        end)
-
-      _ ->
-        false
+    case Map.get(strat, :fan_out) do
+      %FanOutState{} = fan_out -> FanOutState.has_suspended_branch?(fan_out, suspension_id)
+      _ -> false
     end
   end
 end

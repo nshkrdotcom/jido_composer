@@ -42,7 +42,7 @@ defmodule Jido.Composer.ChildrenTrackingTest do
         )
 
       strat = StratState.get(agent)
-      assert %ChildRef{} = ref = strat.children[:process]
+      assert %ChildRef{} = ref = strat.children.refs[:process]
       assert ref.agent_module == SomeChildModule
       assert ref.agent_id == "child-001"
       assert ref.tag == :process
@@ -79,7 +79,7 @@ defmodule Jido.Composer.ChildrenTrackingTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.children[:process].status == :completed
+      assert strat.children.refs[:process].status == :completed
     end
 
     test "child_exit with non-normal reason sets :failed" do
@@ -108,7 +108,7 @@ defmodule Jido.Composer.ChildrenTrackingTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.children[:worker].status == :failed
+      assert strat.children.refs[:worker].status == :failed
     end
   end
 
@@ -140,7 +140,7 @@ defmodule Jido.Composer.ChildrenTrackingTest do
         )
 
       strat = StratState.get(agent)
-      assert %ChildRef{} = ref = strat.children[:worker]
+      assert %ChildRef{} = ref = strat.children.refs[:worker]
       assert ref.agent_module == SomeChildModule
       assert ref.agent_id == "orch-child-001"
       assert ref.status == :running
@@ -183,7 +183,7 @@ defmodule Jido.Composer.ChildrenTrackingTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.children[:worker].status == :completed
+      assert strat.children.refs[:worker].status == :completed
     end
 
     test "child_exit with error reason sets :failed" do
@@ -212,7 +212,7 @@ defmodule Jido.Composer.ChildrenTrackingTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.children[:worker].status == :failed
+      assert strat.children.refs[:worker].status == :failed
     end
   end
 
@@ -240,7 +240,7 @@ defmodule Jido.Composer.ChildrenTrackingTest do
       binary = :erlang.term_to_binary(checkpoint_data, [:compressed])
       restored = :erlang.binary_to_term(binary)
 
-      assert %ChildRef{} = ref = restored.children[:process]
+      assert %ChildRef{} = ref = restored.children.refs[:process]
       assert ref.agent_module == SomeChildModule
       assert ref.agent_id == "child-rt-001"
       assert ref.status == :running

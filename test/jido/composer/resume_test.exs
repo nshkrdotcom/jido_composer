@@ -208,31 +208,34 @@ defmodule Jido.Composer.ResumeTest do
   end
 
   describe "resume with fan-out suspended branches" do
+    alias Jido.Composer.FanOut.State, as: FanOutState
+    alias Jido.Composer.Node.{ActionNode, FanOutNode}
     alias Jido.Composer.Suspension
+    alias Jido.Composer.TestActions.{AddAction, EchoAction}
 
     test "delivers resume signal for fan-out suspended branch" do
       agent = ResumeWorkflow.new()
       {:ok, suspension} = Suspension.new(reason: :rate_limit, metadata: %{})
 
-      # Manually construct agent with pending_fan_out containing suspended_branches
+      # Build a real FanOutNode for the FanOutState struct
+      {:ok, add_node} = ActionNode.new(AddAction)
+      {:ok, echo_node} = ActionNode.new(EchoAction)
+
+      {:ok, fan_out_node} =
+        FanOutNode.new(
+          name: "test_fan_out",
+          branches: [add: add_node, echo: echo_node],
+          on_error: :collect_partial
+        )
+
+      fan_out_state =
+        FanOutState.new("fan-out-test", fan_out_node, MapSet.new([:add, :echo]), [])
+        |> FanOutState.branch_completed(:echo, %{echoed: "hi"})
+        |> FanOutState.branch_suspended(:add, suspension, nil)
+
       agent =
         StratState.update(agent, fn s ->
-          %{
-            s
-            | status: :waiting,
-              pending_fan_out: %{
-                id: "fan-out-test",
-                node: nil,
-                pending_branches: MapSet.new(),
-                completed_results: %{echo: %{echoed: "hi"}},
-                suspended_branches: %{
-                  add: %{suspension: suspension, partial_result: nil}
-                },
-                queued_branches: [],
-                merge: :deep_merge,
-                on_error: :collect_partial
-              }
-          }
+          %{s | status: :waiting, fan_out: fan_out_state}
         end)
 
       deliver_fn = fn agent_to_resume, signal ->
@@ -387,10 +390,14 @@ defmodule Jido.Composer.ResumeTest do
 
       suspended_agent =
         StratState.update(suspended_agent, fn s ->
+          children =
+            s.children
+            |> Map.update!(:refs, &Map.put(&1, :replayer, spawning_child))
+            |> Map.put(:phases, %{replayer: :spawning})
+
           s
           |> Map.put(:checkpoint_status, :hibernated)
-          |> Map.put(:child_phases, %{replayer: :spawning})
-          |> Map.put(:children, Map.put(s.children, :replayer, spawning_child))
+          |> Map.put(:children, children)
         end)
 
       deliver_fn = fn agent_to_resume, signal ->
@@ -432,10 +439,14 @@ defmodule Jido.Composer.ResumeTest do
 
       suspended_agent =
         StratState.update(suspended_agent, fn s ->
+          children =
+            s.children
+            |> Map.update!(:refs, &Map.put(&1, :order_check, spawning_child))
+            |> Map.put(:phases, %{order_check: :spawning})
+
           s
           |> Map.put(:checkpoint_status, :hibernated)
-          |> Map.put(:child_phases, %{order_check: :spawning})
-          |> Map.put(:children, Map.put(s.children, :order_check, spawning_child))
+          |> Map.put(:children, children)
         end)
 
       # Track what deliver_fn returns so we can verify ordering
@@ -511,9 +522,12 @@ defmodule Jido.Composer.ResumeTest do
 
       suspended_agent =
         StratState.update(suspended_agent, fn s ->
-          s
-          |> Map.put(:child_phases, %{thaw_worker: :spawning})
-          |> Map.put(:children, Map.put(s.children, :thaw_worker, spawning_child))
+          children =
+            s.children
+            |> Map.update!(:refs, &Map.put(&1, :thaw_worker, spawning_child))
+            |> Map.put(:phases, %{thaw_worker: :spawning})
+
+          %{s | children: children}
         end)
 
       # Checkpoint the agent (this adds checkpoint_status: :hibernated)
@@ -578,7 +592,7 @@ defmodule Jido.Composer.ResumeTest do
 
       suspended_agent =
         StratState.update(suspended_agent, fn s ->
-          %{s | children: Map.put(s.children, :worker, paused_child)}
+          %{s | children: %{s.children | refs: Map.put(s.children.refs, :worker, paused_child)}}
         end)
 
       deliver_fn = fn agent_to_resume, signal ->

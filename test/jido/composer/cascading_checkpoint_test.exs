@@ -52,7 +52,7 @@ defmodule Jido.Composer.CascadingCheckpointTest do
         )
 
       strat = StratState.get(agent)
-      ref = strat.children[:worker]
+      ref = strat.children.refs[:worker]
       assert ref.status == :paused
       assert ref.checkpoint_key == "ck-child-001"
       assert ref.suspension_id == "suspend-child-001"
@@ -90,8 +90,8 @@ defmodule Jido.Composer.CascadingCheckpointTest do
       checkpoint_data = Checkpoint.prepare_for_checkpoint(strat)
 
       # Verify checkpoint includes the paused child
-      assert checkpoint_data.children[:worker].status == :paused
-      assert checkpoint_data.children[:worker].checkpoint_key == "ck-cp-001"
+      assert checkpoint_data.children.refs[:worker].status == :paused
+      assert checkpoint_data.children.refs[:worker].checkpoint_key == "ck-cp-001"
     end
 
     test "multiple children can hibernate independently" do
@@ -134,8 +134,8 @@ defmodule Jido.Composer.CascadingCheckpointTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.children[:worker_a].status == :paused
-      assert strat.children[:worker_b].status == :running
+      assert strat.children.refs[:worker_a].status == :paused
+      assert strat.children.refs[:worker_b].status == :running
 
       # Hibernate second child
       {agent, _} =
@@ -150,8 +150,8 @@ defmodule Jido.Composer.CascadingCheckpointTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.children[:worker_a].status == :paused
-      assert strat.children[:worker_b].status == :paused
+      assert strat.children.refs[:worker_a].status == :paused
+      assert strat.children.refs[:worker_b].status == :paused
     end
   end
 
@@ -209,7 +209,7 @@ defmodule Jido.Composer.CascadingCheckpointTest do
         )
 
       strat = StratState.get(agent)
-      assert strat.child_phases[:process] == :awaiting_result
+      assert strat.children.phases[:process] == :awaiting_result
     end
   end
 end

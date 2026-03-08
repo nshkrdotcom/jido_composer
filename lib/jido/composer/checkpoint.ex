@@ -12,6 +12,8 @@ defmodule Jido.Composer.Checkpoint do
   """
 
   alias Jido.Agent.Directive
+  alias Jido.Composer.Children
+  alias Jido.Composer.ToolConcurrency
 
   @schema_version :composer_v1
 
@@ -77,10 +79,19 @@ defmodule Jido.Composer.Checkpoint do
   """
   @spec pending_child_respawns(map()) :: [Directive.SpawnAgent.t()]
   def pending_child_respawns(strategy_state) do
-    strategy_state
-    |> Map.get(:children, %{})
-    |> Enum.filter(fn {_tag, ref} -> ref.status == :paused end)
-    |> Enum.map(fn {_tag, ref} ->
+    paused =
+      case Map.get(strategy_state, :children) do
+        %Children{} = children ->
+          Children.paused_refs(children)
+
+        refs when is_map(refs) ->
+          Enum.filter(refs, fn {_tag, ref} -> ref.status == :paused end)
+
+        _ ->
+          []
+      end
+
+    Enum.map(paused, fn {_tag, ref} ->
       %Directive.SpawnAgent{
         agent: ref.agent_module,
         tag: ref.tag,
@@ -109,15 +120,47 @@ defmodule Jido.Composer.Checkpoint do
   end
 
   defp replay_child_phases(state) do
-    # Primary source: child_phases map
+    case Map.get(state, :children) do
+      %Children{} = children ->
+        replay_child_phases_from_struct(children)
+
+      _ ->
+        replay_child_phases_from_flat(state)
+    end
+  end
+
+  defp replay_child_phases_from_struct(%Children{} = children) do
+    spawning = Children.spawning_tags(children)
+
+    # Fallback: if phases is empty, derive from ChildRef.phase fields
+    spawning =
+      if spawning == [] do
+        children.refs
+        |> Enum.filter(fn {_tag, ref} -> Map.get(ref, :phase) == :spawning end)
+        |> Enum.map(fn {tag, _} -> tag end)
+      else
+        spawning
+      end
+
+    Enum.flat_map(spawning, fn tag ->
+      case Children.get_ref(children, tag) do
+        %{agent_module: mod} ->
+          [%Directive.SpawnAgent{agent: mod, tag: tag, opts: %{}}]
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp replay_child_phases_from_flat(state) do
+    refs = Map.get(state, :children, %{})
     phases = Map.get(state, :child_phases, %{})
 
-    # Fallback: if child_phases is empty, derive from ChildRef.phase fields
+    # Fallback: if phases is empty, derive from ChildRef.phase fields
     phases =
       if phases == %{} do
-        state
-        |> Map.get(:children, %{})
-        |> Enum.reduce(%{}, fn {tag, ref}, acc ->
+        Enum.reduce(refs, %{}, fn {tag, ref}, acc ->
           case Map.get(ref, :phase) do
             nil -> acc
             phase -> Map.put(acc, tag, phase)
@@ -129,16 +172,13 @@ defmodule Jido.Composer.Checkpoint do
 
     Enum.flat_map(phases, fn
       {tag, :spawning} ->
-        case get_in(state, [:children, tag]) do
+        case Map.get(refs, tag) do
           %{agent_module: mod} ->
             [%Directive.SpawnAgent{agent: mod, tag: tag, opts: %{}}]
 
           _ ->
             []
         end
-
-      {_tag, :awaiting_result} ->
-        []
 
       _ ->
         []
@@ -147,24 +187,31 @@ defmodule Jido.Composer.Checkpoint do
 
   defp replay_orchestrator_ops(state) do
     module = Map.get(state, :module)
-    status = Map.get(state, :status)
 
-    if module == Jido.Composer.Orchestrator.Strategy do
-      replay_orchestrator_status(state, status)
-    else
-      []
+    cond do
+      is_atom(module) and module != nil and
+          function_exported?(module, :replay_directives_from_state, 1) ->
+        module.replay_directives_from_state(state)
+
+      module == Jido.Composer.Orchestrator.Strategy ->
+        replay_orchestrator_status(state, Map.get(state, :status))
+
+      true ->
+        []
     end
   end
 
   defp replay_orchestrator_status(state, :awaiting_llm) do
     # Re-emit the LLM call from the current conversation state
+    tool_results = extract_completed_tool_results(state)
+
     [
       %Directive.RunInstruction{
         instruction: %Jido.Instruction{
           action: Jido.Composer.Orchestrator.LLMAction,
           params: %{
             conversation: Map.get(state, :conversation),
-            tool_results: Map.get(state, :completed_tool_results, []),
+            tool_results: tool_results,
             tools: Map.get(state, :tools, []),
             model: Map.get(state, :model),
             query: Map.get(state, :query),
@@ -184,7 +231,7 @@ defmodule Jido.Composer.Checkpoint do
   defp replay_orchestrator_status(state, status)
        when status in [:awaiting_tool, :awaiting_tools, :awaiting_tools_and_approval] do
     # Re-dispatch RunInstruction directives for pending tool calls
-    pending = Map.get(state, :pending_tool_calls, [])
+    pending = extract_pending_tool_calls(state)
     nodes = Map.get(state, :nodes, %{})
     context = Map.get(state, :context)
     conversation = Map.get(state, :conversation, [])
@@ -305,4 +352,20 @@ defmodule Jido.Composer.Checkpoint do
   @spec migrate(map(), non_neg_integer()) :: map()
   def migrate(state, 1), do: state
   def migrate(state, _version), do: state
+
+  # -- Private helpers for ToolConcurrency struct / legacy flat map compat --
+
+  defp extract_pending_tool_calls(state) do
+    case Map.get(state, :tool_concurrency) do
+      %ToolConcurrency{pending: pending} -> pending
+      _ -> Map.get(state, :pending_tool_calls, [])
+    end
+  end
+
+  defp extract_completed_tool_results(state) do
+    case Map.get(state, :tool_concurrency) do
+      %ToolConcurrency{completed: completed} -> completed
+      _ -> Map.get(state, :completed_tool_results, [])
+    end
+  end
 end

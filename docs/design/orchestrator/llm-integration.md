@@ -138,7 +138,7 @@ The strategy's `emit_llm_call/1` builds a flat params map from its state:
 ```elixir
 %{
   conversation: state.conversation,
-  tool_results: state.completed_tool_results,
+  tool_results: state.tool_concurrency.completed,
   tools: state.tools,
   model: state.model,
   query: state.query,
