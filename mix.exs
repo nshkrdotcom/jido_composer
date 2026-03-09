@@ -50,6 +50,12 @@ defmodule JidoComposer.MixProject do
       # LLM
       {:req_llm, "~> 1.6"},
 
+      # Observability (optional — used by livebooks and when configured)
+      {:agent_obs, path: "../agent_obs", optional: true},
+      {:opentelemetry, "~> 1.3", optional: true},
+      {:opentelemetry_api, "~> 1.2", optional: true},
+      {:opentelemetry_exporter, "~> 1.6", optional: true},
+
       # Dev/Test
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: [:dev, :test], runtime: false},
@@ -168,6 +174,7 @@ defmodule JidoComposer.MixProject do
         "livebooks/03_approval_workflow.livemd",
         "livebooks/04_llm_orchestrator.livemd",
         "livebooks/05_multi_agent_pipeline.livemd",
+        "livebooks/06_observability.livemd",
         # Design: Architecture
         "docs/design/README.md",
         "docs/design/overview.md",
@@ -195,6 +202,8 @@ defmodule JidoComposer.MixProject do
         "docs/design/hitl/strategy-integration.md",
         "docs/design/hitl/persistence.md",
         "docs/design/hitl/nested-propagation.md",
+        # Design: Observability
+        "docs/design/observability.md",
         # Design: Testing
         "docs/design/testing.md",
         # Design: Limitations
@@ -215,7 +224,8 @@ defmodule JidoComposer.MixProject do
           "livebooks/02_branching_and_parallel.livemd",
           "livebooks/03_approval_workflow.livemd",
           "livebooks/04_llm_orchestrator.livemd",
-          "livebooks/05_multi_agent_pipeline.livemd"
+          "livebooks/05_multi_agent_pipeline.livemd",
+          "livebooks/06_observability.livemd"
         ],
         "Design: Architecture": [
           "docs/design/README.md",
@@ -240,6 +250,9 @@ defmodule JidoComposer.MixProject do
           "docs/design/orchestrator/README.md",
           "docs/design/orchestrator/strategy.md",
           "docs/design/orchestrator/llm-integration.md"
+        ],
+        "Design: Observability": [
+          "docs/design/observability.md"
         ],
         "Design: Suspension & HITL": [
           "docs/design/hitl/README.md",

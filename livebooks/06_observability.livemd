@@ -1,0 +1,330 @@
+# Observability: Tracing Agent Execution
+
+```elixir
+Mix.install(
+  [
+    {:jido_composer, path: Path.join(__DIR__, "..")},
+    {:agent_obs, path: Path.join(__DIR__, "../../agent_obs")},
+    {:opentelemetry, "~> 1.3"},
+    {:opentelemetry_api, "~> 1.2"},
+    {:opentelemetry_exporter, "~> 1.6"},
+    {:kino, "~> 0.14"}
+  ],
+  config: [
+    jido: [
+      observability: [
+        tracer: AgentObs.JidoTracer
+      ]
+    ],
+    jido_action: [default_timeout: :timer.minutes(5)],
+    agent_obs: [
+      enabled: true,
+      handlers: [AgentObs.Handlers.Phoenix],
+      event_prefix: [:agent_obs]
+    ],
+    opentelemetry: [
+      span_processor: :simple,
+      resource: [service: [name: "jido_composer_demo"]]
+    ],
+    opentelemetry_exporter: [
+      otlp_protocol: :http_protobuf,
+      otlp_endpoint: "http://localhost:6060"
+    ]
+  ]
+)
+```
+
+## Introduction
+
+This guide demonstrates **structured tracing** of Jido Composer agent execution.
+Every orchestrator query, LLM call, tool dispatch, and workflow node produces
+OpenTelemetry spans with OpenInference semantic conventions, viewable in
+[Arize Phoenix](https://docs.arize.com/phoenix).
+
+**Prerequisites:**
+
+- Arize Phoenix running at `http://localhost:6060`
+  (e.g., `docker run -p 6006:6006 -p 6060:6060 arizephoenix/phoenix:latest`)
+- `ANTHROPIC_API_KEY` set for LLM demos
+
+**What you'll see in Phoenix:**
+
+- Nested trace trees (AGENT > LLM > TOOL)
+- OpenInference span kinds
+- Input/output values, model names, durations
+
+## Setup
+
+```elixir
+api_key =
+  System.get_env("ANTHROPIC_API_KEY") ||
+    raise "Set ANTHROPIC_API_KEY in your environment or Livebook app settings."
+
+Application.put_env(:req_llm, :anthropic_api_key, api_key)
+
+# Configure observability: JidoTracer bridges Jido.Observe spans -> AgentObs -> OTel
+Application.put_env(:jido, :observability, tracer: AgentObs.JidoTracer)
+
+# Configure AgentObs handlers
+Application.put_env(:agent_obs, :enabled, true)
+Application.put_env(:agent_obs, :handlers, [AgentObs.Handlers.Phoenix])
+Application.put_env(:agent_obs, :event_prefix, [:agent_obs])
+
+# Stop OTel apps so we can reconfigure them (they auto-start with defaults)
+Application.stop(:opentelemetry)
+Application.stop(:opentelemetry_exporter)
+
+# Configure OTel SDK: simple processor exports immediately, HTTP protobuf to Phoenix
+Application.put_env(:opentelemetry, :resource, %{service: %{name: "jido_composer_demo"}})
+Application.put_env(:opentelemetry, :span_processor, :simple)
+Application.put_env(:opentelemetry_exporter, :otlp_protocol, :http_protobuf)
+Application.put_env(:opentelemetry_exporter, :otlp_endpoint, "http://localhost:6060")
+
+# Restart OTel with new config (order matters: exporter before SDK)
+{:ok, _} = Application.ensure_all_started(:opentelemetry_exporter)
+{:ok, _} = Application.ensure_all_started(:opentelemetry)
+{:ok, _} = Application.ensure_all_started(:agent_obs)
+
+IO.puts("Setup complete. Traces will export to http://localhost:6060")
+```
+
+## Define Actions
+
+```elixir
+defmodule Demo.Helpers do
+  defmacro suppress_agent_doctests do
+    quote do
+      @doc false
+      def plugins, do: super()
+      @doc false
+      def capabilities, do: super()
+      @doc false
+      def signal_types, do: super()
+    end
+  end
+end
+
+defmodule Demo.ExtractAction do
+  use Jido.Action,
+    name: "extract",
+    description: "Extracts raw data from a source",
+    schema: [
+      source: [type: :string, required: false, doc: "Data source name"]
+    ]
+
+  def on_before_validate_params(params), do: {:ok, params}
+
+  def run(params, _ctx) do
+    source = Map.get(params, :source, "default")
+    {:ok, %{records: ["record_1", "record_2", "record_3"], source: source}}
+  end
+end
+
+defmodule Demo.TransformAction do
+  use Jido.Action,
+    name: "transform",
+    description: "Transforms extracted records",
+    schema: [
+      records: [type: {:list, :string}, required: false, doc: "Records to transform"]
+    ]
+
+  def on_before_validate_params(params), do: {:ok, params}
+
+  def run(params, _ctx) do
+    records = Map.get(params, :records, [])
+    transformed = Enum.map(records, &String.upcase/1)
+    {:ok, %{transformed: transformed, count: length(transformed)}}
+  end
+end
+
+defmodule Demo.LoadAction do
+  use Jido.Action,
+    name: "load",
+    description: "Loads transformed data to destination",
+    schema: [
+      transformed: [type: {:list, :string}, required: false, doc: "Transformed records"]
+    ]
+
+  def on_before_validate_params(params), do: {:ok, params}
+
+  def run(params, _ctx) do
+    transformed = Map.get(params, :transformed, [])
+    {:ok, %{loaded: length(transformed), status: "complete"}}
+  end
+end
+
+defmodule Demo.ValidateDocsAction do
+  use Jido.Action,
+    name: "validate_docs",
+    description: "Validates document structure and content",
+    schema: [
+      input: [type: :string, required: false, doc: "Input text to validate"]
+    ]
+
+  def on_before_validate_params(params), do: {:ok, params}
+
+  def run(params, _ctx) do
+    input = Map.get(params, :input, "")
+    {:ok, %{valid: true, checked: String.length(input), issues: []}}
+  end
+end
+
+IO.puts("Actions defined: extract, transform, load, validate_docs")
+```
+
+## Define Workflow
+
+A simple ETL pipeline: extract -> transform -> load.
+
+```elixir
+defmodule Demo.ETLWorkflow do
+  use Jido.Composer.Workflow,
+    name: "etl_pipeline",
+    description:
+      "Runs an ETL pipeline: extracts data from a source, transforms records by uppercasing, and loads them. Returns the full pipeline results.",
+    schema: [
+      source: [type: :string, required: true, doc: "Data source identifier"]
+    ],
+    nodes: %{
+      extract: {:action, Demo.ExtractAction},
+      transform: {:action, Demo.TransformAction},
+      load: {:action, Demo.LoadAction}
+    },
+    transitions: %{
+      {:extract, :ok} => :transform,
+      {:transform, :ok} => :load,
+      {:load, :ok} => :done
+    },
+    initial: :extract
+
+  require Demo.Helpers
+  Demo.Helpers.suppress_agent_doctests()
+end
+
+IO.puts("ETL Workflow defined.")
+```
+
+## Run Simple Workflow
+
+```elixir
+agent = Demo.ETLWorkflow.new()
+{:ok, result} = Demo.ETLWorkflow.run_sync(agent, %{source: "orders_db"})
+
+IO.puts("=== ETL Pipeline Result ===")
+IO.puts("Loaded: #{result[:load][:loaded]} records, status: #{result[:load][:status]}")
+IO.puts("""
+
+Expected trace in Phoenix:
+  AGENT: test_obs_workflow
+  +-- TOOL: extract
+  +-- TOOL: transform
+  +-- TOOL: load
+""")
+```
+
+## Define Orchestrator
+
+An LLM orchestrator with validate_docs (action tool) + the ETL workflow as an
+AgentNode tool. The AgentNode pattern emits a `SpawnAgent` directive with OTel
+context propagation, so the nested workflow's AGENT span parents under the
+orchestrator's TOOL span (Gap 7).
+
+```elixir
+defmodule Demo.AnalysisOrchestrator do
+  use Jido.Composer.Orchestrator,
+    name: "analysis_orchestrator",
+    description: "Analyzes documents using LLM-driven tool selection",
+    model: "anthropic:claude-sonnet-4-20250514",
+    system_prompt: """
+    You are a document analysis assistant. You have two tools available:
+    1. validate_docs — validates document text
+    2. etl_pipeline — runs an ETL pipeline on a data source
+
+    When the user asks you to validate and process documents, ALWAYS call both
+    tools. Do not ask for clarification. Use "quarterly_reports" as the source
+    for the ETL pipeline and "Q1 2024 Financial Summary" as the input text for
+    validation. Call both tools, then summarize what happened.
+    """,
+    nodes: [Demo.ValidateDocsAction, {Demo.ETLWorkflow, []}],
+    max_iterations: 5
+
+  require Demo.Helpers
+  Demo.Helpers.suppress_agent_doctests()
+end
+
+IO.puts("Analysis Orchestrator defined with ETL workflow as AgentNode tool.")
+```
+
+## Run Orchestrator
+
+```elixir
+agent = Demo.AnalysisOrchestrator.new()
+
+{:ok, answer} =
+  Demo.AnalysisOrchestrator.query_sync(
+    agent,
+    "Validate the quarterly report documents, then run the ETL pipeline to process them."
+  )
+
+IO.puts("=== Orchestrator Result ===")
+IO.puts("Answer: #{answer}")
+IO.puts("""
+
+Expected trace in Phoenix:
+  AGENT: analysis_orchestrator
+  +-- CHAIN: iteration 1
+  |   +-- LLM: anthropic:claude-sonnet-4-20250514 #1
+  |   +-- TOOL: validate_docs
+  |   +-- TOOL: etl_pipeline              <-- orchestrator TOOL span
+  |       +-- AGENT: etl_pipeline          <-- nested workflow AGENT (Gap 7: parentId = TOOL span)
+  |           +-- TOOL: extract
+  |           +-- TOOL: transform
+  |           +-- TOOL: load
+  +-- CHAIN: iteration 2
+      +-- LLM: anthropic:claude-sonnet-4-20250514 #2 (final answer)
+""")
+```
+
+## Flush Traces
+
+```elixir
+# Force the OTel span processor to export all buffered spans before exiting.
+# Without this, the BEAM may shut down before spans are sent.
+try do
+  :opentelemetry.get_tracer_provider()
+  |> :otel_tracer_provider.force_flush()
+rescue
+  _ -> :ok
+catch
+  _, _ -> :ok
+end
+
+# Small delay to allow the HTTP export to complete
+Process.sleep(2000)
+IO.puts("Traces flushed to Phoenix.")
+```
+
+## Verify in Phoenix
+
+```elixir
+IO.puts("""
+=== Verification Checklist ===
+
+Open Phoenix UI at: http://localhost:6060/projects/
+
+Check the following:
+  [ ] Traces appear in the project list
+  [ ] Nested span trees are visible (AGENT > LLM > TOOL)
+  [ ] OpenInference span kinds show correctly (AGENT, LLM, TOOL)
+  [ ] Input/output values are captured on spans
+  [ ] Parent-child relationships are correct
+  [ ] Duration is measured for each span
+  [ ] Model name appears on LLM spans
+  [ ] Tool names appear on TOOL spans
+
+If traces don't appear:
+  1. Verify Phoenix is running: curl http://localhost:6060/
+  2. Check OTLP endpoint is reachable on port 6060
+  3. The simple span processor exports immediately (no batching delay)
+""")
+```

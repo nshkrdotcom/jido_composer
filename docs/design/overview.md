@@ -30,6 +30,8 @@ graph TB
         AT["AgentTool"]
         ODSL["Orchestrator DSL"]
         Err["Error"]
+        OBS["Obs Structs<br/>(span lifecycle)"]
+        OCTL["OtelCtx<br/>(context mgmt)"]
 
         Composer --> Node
         Composer --> CTX
@@ -54,6 +56,10 @@ graph TB
         ORC --> LLM
         ORC --> AT
         ORC --> ODSL
+        WF --> OBS
+        ORC --> OBS
+        WDSL --> OCTL
+        ODSL --> OCTL
     end
 
     subgraph "Jido Ecosystem (dependencies)"
@@ -108,6 +114,9 @@ All user-facing modules live under this namespace:
 | `Jido.Composer.Orchestrator.Strategy`  | [Orchestrator strategy](orchestrator/strategy.md)                                                       |
 | Jido.Composer.Orchestrator.LLMAction   | [LLM integration](orchestrator/llm-integration.md) calling ReqLLM directly                              |
 | `Jido.Composer.Orchestrator.AgentTool` | [Node-to-tool adapter](orchestrator/README.md#agenttool-adapter)                                        |
+| `Jido.Composer.OtelCtx`                | [OTel context management](observability.md#otelctx)                                                     |
+| `Jido.Composer.Orchestrator.Obs`       | [Orchestrator observability state](observability.md#obs-structs)                                        |
+| `Jido.Composer.Workflow.Obs`           | [Workflow observability state](observability.md#obs-structs)                                            |
 | `Jido.Composer.Error`                  | [Structured errors](#error-handling)                                                                    |
 
 ## Design Principles
@@ -275,7 +284,7 @@ See [Glossary — Error](glossary.md#error) for the term definition.
 | `deep_merge`     | [Context accumulation](nodes/context-flow.md) — the monoidal merge operation for composing node results                                                                                                                               |
 | `jason`          | JSON serialization for [AgentTool](orchestrator/README.md#agenttool-adapter) parameter schemas                                                                                                                                        |
 | `nimble_options` | Legacy schema format support for node parameter definitions                                                                                                                                                                           |
-| `telemetry`      | Execution metrics and tracing for node execution, strategy transitions, and LLM calls                                                                                                                                                 |
+| `telemetry`      | Execution metrics and [observability spans](observability.md) via `Jido.Observe` for strategy lifecycle, LLM calls, and tool dispatch                                                                                                 |
 | `req_cassette`   | Test-only. Records and replays HTTP interactions as [cassettes](testing.md). Preferred over mocks for LLM response testing                                                                                                            |
 
 ### Architectural References

@@ -53,6 +53,11 @@ shared by all participants.
     recursive composition, FanOut branches, concurrent work, and cascading
     cancellation
 
+## Observability
+
+- [Observability](observability.md) — OpenTelemetry span hierarchy, Obs structs,
+  OtelCtx context management, tracer integration, and checkpoint serialization
+
 ## Testing
 
 - [Testing Strategy](testing.md) — TDD approach, cassette-based testing with

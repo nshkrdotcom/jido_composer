@@ -8,6 +8,8 @@ defmodule Jido.Composer.Workflow.Strategy do
 
   use Jido.Agent.Strategy
 
+  require Logger
+
   alias Jido.Agent.Directive
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.Composer.Checkpoint
@@ -22,6 +24,8 @@ defmodule Jido.Composer.Workflow.Strategy do
   alias Jido.Composer.Node.HumanNode
   alias Jido.Composer.Suspension
   alias Jido.Composer.Workflow.Machine
+  alias Jido.Composer.Workflow.Obs
+  alias Jido.Composer.OtelCtx
 
   # -- init/2 --
 
@@ -64,7 +68,8 @@ defmodule Jido.Composer.Workflow.Strategy do
         hibernate_after: opts[:hibernate_after],
         agent_id: agent.id,
         agent_module: ctx[:agent_module],
-        success_states: opts[:success_states] || [:done]
+        success_states: opts[:success_states] || [:done],
+        _obs: Obs.new()
       })
 
     {agent, []}
@@ -83,12 +88,23 @@ defmodule Jido.Composer.Workflow.Strategy do
     machine = %{strat.machine | context: context}
     agent = put_machine(agent, machine)
 
+    maybe_reattach_parent_otel_ctx(agent)
+    agent = update_obs(agent, &Obs.start_agent_span(&1, %{name: Obs.agent_name(agent)}))
     dispatch_current_node(agent)
   end
 
   def cmd(agent, [%Jido.Instruction{action: :workflow_node_result} = instr | _rest], _ctx) do
     strat = StratState.get(agent)
     params = instr.params
+
+    node_measurements =
+      case params do
+        %{status: :ok, result: result} -> %{result: result}
+        %{status: :error} -> %{error: "node execution failed"}
+        _ -> %{}
+      end
+
+    agent = update_obs(agent, &Obs.finish_node_span(&1, node_measurements))
 
     case params do
       %{status: :ok, result: result, outcome: :suspend} ->
@@ -155,6 +171,12 @@ defmodule Jido.Composer.Workflow.Strategy do
 
     case params do
       %{result: {:ok, result}} ->
+        # Strip the Context ambient marker key — it's a tuple that can't be serialized
+        result =
+          if is_map(result),
+            do: Map.delete(result, Context.ambient_key()),
+            else: result
+
         machine = Machine.apply_result(strat.machine, result)
 
         case Machine.transition(machine, :ok) do
@@ -404,6 +426,7 @@ defmodule Jido.Composer.Workflow.Strategy do
       success_states = Map.get(strat, :success_states, [:done])
       status = if strat.machine.status in success_states, do: :success, else: :failure
       agent = StratState.set_status(agent, status)
+      agent = finish_agent_span(agent)
       {agent, []}
     else
       dispatch_current_node(agent)
@@ -417,7 +440,24 @@ defmodule Jido.Composer.Workflow.Strategy do
     if is_nil(node) do
       {agent, []}
     else
+      node_name = node.__struct__.name(node)
       flat_context = Context.to_flat_map(strat.machine.context)
+
+      # Strip the ambient marker key from arguments — it's a tuple that
+      # can't be serialized to string by OTel span attribute encoders.
+      obs_arguments = Map.delete(flat_context, Context.ambient_key())
+
+      agent =
+        update_obs(
+          agent,
+          &Obs.start_node_span(&1, %{
+            node_name: node_name,
+            name: node_name,
+            state: strat.machine.status,
+            arguments: obs_arguments
+          })
+        )
+
       opts = build_node_dispatch_opts(node, strat)
 
       case node.__struct__.to_directive(node, flat_context, opts) do
@@ -844,6 +884,7 @@ defmodule Jido.Composer.Workflow.Strategy do
   @spec strip_for_checkpoint(map()) :: map()
   def strip_for_checkpoint(state) do
     Map.new(state, fn
+      {:_obs, _} -> {:_obs, Obs.new()}
       {k, v} when is_function(v) -> {k, nil}
       kv -> kv
     end)
@@ -854,6 +895,30 @@ defmodule Jido.Composer.Workflow.Strategy do
     strat = StratState.get(agent)
     restored = Checkpoint.reattach_runtime_config(strat, strategy_opts)
     StratState.put(agent, restored)
+  end
+
+  # -- Observability helpers (delegate to Obs struct) --
+
+  defp update_obs(agent, fun) do
+    StratState.update(agent, fn s -> %{s | _obs: fun.(s._obs)} end)
+  end
+
+  defp finish_agent_span(agent, extra \\ %{}) do
+    state = StratState.get(agent)
+    obs = Obs.finish_agent_span(state._obs, state, extra)
+    StratState.update(agent, fn s -> %{s | _obs: obs} end)
+  end
+
+  defp maybe_reattach_parent_otel_ctx(agent) do
+    case agent do
+      %{state: %{__parent__: %{meta: %{otel_parent_ctx: otel_ctx}}}} when otel_ctx != nil ->
+        Logger.debug("obs: reattaching parent OTel context for workflow agent")
+        OtelCtx.attach(otel_ctx)
+
+      _ ->
+        Logger.debug("obs: no parent OTel context found for workflow agent")
+        :ok
+    end
   end
 
   defp build_nodes(node_specs) when is_map(node_specs) do

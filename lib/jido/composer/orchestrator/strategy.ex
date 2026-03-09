@@ -24,7 +24,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
   alias Jido.Composer.Node.AgentNode
   alias Jido.Composer.NodeIO
   alias Jido.Composer.Orchestrator.AgentTool
+  alias Jido.Composer.Orchestrator.Obs
   alias Jido.Composer.Orchestrator.StatusComputer
+  alias Jido.Composer.OtelCtx
   alias Jido.Composer.Suspension
 
   # -- init/2 --
@@ -131,7 +133,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         children: Children.new(),
         hibernate_after: opts[:hibernate_after],
         termination_tool_name: term_name,
-        termination_tool_mod: term_mod
+        termination_tool_mod: term_mod,
+        _obs: Obs.new()
       })
 
     {agent, []}
@@ -150,11 +153,18 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         %{s | status: :awaiting_llm, query: query, iteration: 0, context: new_context}
       end)
 
+    agent =
+      update_obs(agent, &Obs.start_agent_span(&1, %{query: query, name: Obs.agent_name(agent)}))
+
     emit_llm_call(agent)
   end
 
   def cmd(agent, [%Jido.Instruction{action: :orchestrator_llm_result} = instr | _], _ctx) do
     params = instr.params
+
+    llm_measurements = Obs.build_llm_measurements(params)
+    agent = update_obs(agent, &Obs.accumulate_tokens(&1, llm_measurements))
+    agent = update_obs(agent, &Obs.finish_llm_span(&1, llm_measurements))
 
     case params do
       %{status: :ok, result: %{response: response, conversation: conversation}} ->
@@ -166,6 +176,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
             %{s | status: :error, result: inspect(reason)}
           end)
 
+        agent = finish_agent_span(agent, %{error: reason})
         {agent, []}
 
       _ ->
@@ -174,6 +185,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
             %{s | status: :error, result: "unexpected LLM result format"}
           end)
 
+        agent = finish_agent_span(agent, %{error: "unexpected LLM result format"})
         {agent, []}
     end
   end
@@ -218,6 +230,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
               %{s | tool_concurrency: new_tc, context: new_context}
             end)
+
+          agent = finish_tool_span(agent, call_id, tool_name, params[:result], status)
 
           {agent, queue_directives} = dispatch_queued_tool_calls(agent)
           {agent, done_directives} = check_all_tools_done(agent)
@@ -272,6 +286,13 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         other -> {:ok, other}
       end
 
+    # Strip the Context ambient marker key from child result — it's a tuple that
+    # can't be serialized to JSON for the LLM conversation.
+    result =
+      if is_map(result),
+        do: Map.delete(result, Jido.Composer.Context.ambient_key()),
+        else: result
+
     tool_result = AgentTool.to_tool_result(call_id, tool_name, {status, result})
 
     scope_key = scope_atom(agent, tool_name)
@@ -294,6 +315,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
             children: Children.record_result(s.children, tag)
         }
       end)
+
+    agent = finish_tool_span(agent, call_id, tool_name, result, status)
 
     {agent, queue_directives} = dispatch_queued_tool_calls(agent)
     {agent, done_directives} = check_all_tools_done(agent)
@@ -358,7 +381,10 @@ defmodule Jido.Composer.Orchestrator.Strategy do
             end)
 
           state = StratState.get(agent)
-          directive = build_tool_directive(call, state.nodes, state.context, state.schema_keys)
+
+          directive =
+            build_tool_directive(call, state.nodes, state.context, schema_keys: state.schema_keys)
+
           {agent, [directive]}
         end
 
@@ -535,6 +561,15 @@ defmodule Jido.Composer.Orchestrator.Strategy do
             %{s | status: :completed, result: NodeIO.text(text)}
           end)
 
+        agent =
+          update_obs(
+            agent,
+            &Obs.finish_iteration_span(&1, %{
+              output: "final_answer: #{String.slice(text, 0..100)}"
+            })
+          )
+
+        agent = finish_agent_span(agent)
         {agent, []}
 
       {:tool_calls, calls} ->
@@ -549,6 +584,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
             %{s | status: :error, result: inspect(reason)}
           end)
 
+        agent = update_obs(agent, &Obs.finish_iteration_span(&1, %{error: reason}))
+        agent = finish_agent_span(agent, %{error: reason})
         {agent, []}
     end
   end
@@ -596,10 +633,19 @@ defmodule Jido.Composer.Orchestrator.Strategy do
             %{s | status: new_status, tool_concurrency: new_tc, approval_gate: new_ag}
           end)
 
+        # Start tool spans and capture OTel context for AgentNode child propagation.
+        {agent, otel_ctx_by_call} =
+          start_tool_spans_with_ctx(agent, to_dispatch, state.nodes)
+
         # Build directives for dispatched (ungated, within concurrency limit) calls
         ungated_directives =
           Enum.map(to_dispatch, fn call ->
-            build_tool_directive(call, state.nodes, state.context, state.schema_keys)
+            otel_ctx = Map.get(otel_ctx_by_call, call.id)
+
+            build_tool_directive(call, state.nodes, state.context,
+              schema_keys: state.schema_keys,
+              otel_parent_ctx: otel_ctx
+            )
           end)
 
         # Track spawning phase for AgentNode tool calls
@@ -630,7 +676,12 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     end
   end
 
-  defp build_tool_directive(call, nodes, %Context{} = ctx, schema_keys \\ nil) do
+  defp build_tool_directive(call, nodes, ctx, opts \\ [])
+
+  defp build_tool_directive(call, nodes, %Context{} = ctx, opts) do
+    schema_keys = Keyword.get(opts, :schema_keys)
+    otel_parent_ctx = Keyword.get(opts, :otel_parent_ctx)
+
     keys_for_call =
       case schema_keys do
         %{} ->
@@ -662,7 +713,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       meta: %{call_id: call.id, tool_name: call.name},
       tag: {:tool_call, call.id, call.name},
       structured_context: ctx,
-      tool_args: tool_args
+      tool_args: tool_args,
+      otel_parent_ctx: otel_parent_ctx
     ]
 
     {:ok, [directive | _]} = node.__struct__.to_directive(node, flat_context, opts)
@@ -671,6 +723,32 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
   defp emit_llm_call(agent) do
     state = StratState.get(agent)
+
+    agent =
+      update_obs(
+        agent,
+        &Obs.start_iteration_span(&1, %{
+          iteration: state.iteration + 1,
+          input: Obs.summarize_conversation(state)
+        })
+      )
+
+    input_messages =
+      case Obs.extract_input_messages(state.conversation) do
+        nil -> [%{role: "user", content: state.query || ""}]
+        [] -> [%{role: "user", content: state.query || ""}]
+        msgs -> msgs
+      end
+
+    agent =
+      update_obs(
+        agent,
+        &Obs.start_llm_span(&1, %{
+          model: state.model,
+          iteration: state.iteration + 1,
+          input_messages: input_messages
+        })
+      )
 
     directive =
       build_llm_instruction(%{
@@ -785,7 +863,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
               %{s | approval_gate: new_ag, tool_concurrency: new_tc, status: new_status}
             end)
 
-          directive = build_tool_directive(call, state.nodes, state.context, state.schema_keys)
+          directive =
+            build_tool_directive(call, state.nodes, state.context, schema_keys: state.schema_keys)
+
           {agent, [directive]}
         end
 
@@ -932,6 +1012,12 @@ defmodule Jido.Composer.Orchestrator.Strategy do
            state.suspended_calls
          ) do
       :awaiting_llm ->
+        agent =
+          update_obs(
+            agent,
+            &Obs.finish_iteration_span(&1, %{output: "tools_done, next_iteration"})
+          )
+
         agent = StratState.update(agent, fn s -> %{s | status: :awaiting_llm} end)
         emit_llm_call(agent)
 
@@ -950,7 +1036,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     else
       directives =
         Enum.map(to_dispatch, fn call ->
-          build_tool_directive(call, state.nodes, state.context, state.schema_keys)
+          build_tool_directive(call, state.nodes, state.context, schema_keys: state.schema_keys)
         end)
 
       spawn_phases =
@@ -1142,6 +1228,9 @@ defmodule Jido.Composer.Orchestrator.Strategy do
       {:approval_gate, %{approval_policy: _} = gate} ->
         {:approval_gate, %{gate | approval_policy: nil}}
 
+      {:_obs, _} ->
+        {:_obs, Obs.new()}
+
       {k, v} when is_function(v) ->
         {k, nil}
 
@@ -1155,6 +1244,54 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     strat = StratState.get(agent)
     restored = Checkpoint.reattach_runtime_config(strat, strategy_opts)
     StratState.put(agent, restored)
+  end
+
+  # -- Observability helpers (delegate to Obs struct) --
+
+  defp update_obs(agent, fun) do
+    StratState.update(agent, fn s -> %{s | _obs: fun.(s._obs)} end)
+  end
+
+  defp finish_agent_span(agent, extra \\ %{}) do
+    state = StratState.get(agent)
+    obs = Obs.finish_agent_span(state._obs, state, extra)
+    StratState.update(agent, fn s -> %{s | _obs: obs} end)
+  end
+
+  defp finish_tool_span(agent, call_id, tool_name, result, status) do
+    measurements = %{tool_name: tool_name, result: result, status: status}
+
+    measurements =
+      if status == :error,
+        do: Map.put(measurements, :error, result),
+        else: measurements
+
+    update_obs(agent, &Obs.finish_tool_span(&1, call_id, measurements))
+  end
+
+  # Start tool spans for dispatched calls, saving/restoring OTel context so
+  # sibling spans don't nest under each other. For AgentNode calls, captures
+  # the tool span's OTel context for child process propagation.
+  defp start_tool_spans_with_ctx(agent, to_dispatch, nodes) do
+    Enum.reduce(to_dispatch, {agent, %{}}, fn call, {ag, ctx_map} ->
+      saved_ctx = OtelCtx.get_current()
+      ag = update_obs(ag, &Obs.start_tool_span(&1, call))
+
+      is_agent_node = match?(%AgentNode{}, nodes[call.name])
+
+      ctx_map =
+        if is_agent_node do
+          case OtelCtx.get_current() do
+            nil -> ctx_map
+            ctx -> Map.put(ctx_map, call.id, ctx)
+          end
+        else
+          ctx_map
+        end
+
+      OtelCtx.attach(saved_ctx)
+      {ag, ctx_map}
+    end)
   end
 
   defp build_nodes(modules) when is_list(modules) do

@@ -112,6 +112,12 @@ defmodule Jido.Composer.Orchestrator.LLMAction do
     classified = ReqLLM.Response.classify(response)
     updated_context = response.context
 
+    base = %{
+      conversation: updated_context,
+      usage: response.usage,
+      finish_reason: response.finish_reason
+    }
+
     case classified.type do
       :tool_calls ->
         calls = classified.tool_calls
@@ -124,10 +130,10 @@ defmodule Jido.Composer.Orchestrator.LLMAction do
             {:tool_calls, calls}
           end
 
-        {:ok, %{response: resp, conversation: updated_context}}
+        {:ok, Map.put(base, :response, resp)}
 
       :final_answer ->
-        {:ok, %{response: {:final_answer, classified.text}, conversation: updated_context}}
+        {:ok, Map.put(base, :response, {:final_answer, classified.text})}
     end
   end
 end

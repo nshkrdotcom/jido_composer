@@ -130,10 +130,17 @@ defmodule Jido.Composer.Node.AgentNode do
         args -> Map.merge(child_flat, args)
       end
 
+    meta =
+      case Keyword.get(kw_opts, :otel_parent_ctx) do
+        nil -> %{}
+        otel_ctx -> %{otel_parent_ctx: otel_ctx}
+      end
+
     directive = %Jido.Agent.Directive.SpawnAgent{
       tag: tag,
       agent: agent_module,
-      opts: Map.new(opts) |> Map.put(:context, child_flat)
+      opts: Map.new(opts) |> Map.put(:context, child_flat),
+      meta: meta
     }
 
     {:ok, [directive]}

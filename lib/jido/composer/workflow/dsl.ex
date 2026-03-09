@@ -130,8 +130,18 @@ defmodule Jido.Composer.Workflow.DSL do
         {agent, new_directives} = module.cmd(agent, {result_action, payload})
         run_directives(module, agent, new_directives ++ rest)
 
-      %Jido.Agent.Directive.SpawnAgent{agent: child_module, tag: tag, opts: spawn_opts} ->
-        payload = Jido.Composer.Node.execute_child_sync(child_module, spawn_opts)
+      %Jido.Agent.Directive.SpawnAgent{
+        agent: child_module,
+        tag: tag,
+        opts: spawn_opts,
+        meta: meta
+      } ->
+        # Run child with parent OTel context attached so its AGENT span parents
+        # under the parent's TOOL span (Gap 7 fix)
+        payload =
+          Jido.Composer.OtelCtx.with_parent_context(meta[:otel_parent_ctx], fn ->
+            Jido.Composer.Node.execute_child_sync(child_module, spawn_opts)
+          end)
 
         {agent, new_directives} =
           module.cmd(agent, {:workflow_child_result, %{tag: tag, result: payload}})

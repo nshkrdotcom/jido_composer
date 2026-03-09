@@ -175,6 +175,24 @@ participants implement. A node is a function from context to context:
 `run(context, opts) -> {:ok, context} | {:ok, context, outcome} | {:error, reason}`.
 See [Nodes](nodes/README.md).
 
+### Obs
+
+A pure data struct that encapsulates [observability](observability.md) span
+state for a strategy. `Orchestrator.Obs` holds agent, LLM, tool, and iteration
+span contexts plus cumulative token counts. `Workflow.Obs` holds agent and node
+span contexts. Strategies store a single `_obs` field containing the
+appropriate Obs struct, which is reset to `Obs.new()` during
+[checkpoint](hitl/persistence.md) serialization. See
+[Observability — Obs Structs](observability.md#obs-structs).
+
+### OtelCtx
+
+A utility module (`Jido.Composer.OtelCtx`) that centralizes OpenTelemetry
+process-dictionary context management. Provides `with_parent_context/2` for
+guaranteed save/attach/restore via `try/after`, and gracefully no-ops when
+OpenTelemetry is not loaded. Used by both DSL runtimes for
+[nested agent span propagation](observability.md#nested-agent-span-propagation).
+
 ### Orchestrator
 
 A composition pattern where an [LLM](#llm-integration-llmaction) dynamically
