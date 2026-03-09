@@ -224,8 +224,8 @@ When an [AgentNode](README.md#agentnode) executes, the context crosses a process
 boundary. The composition layer:
 
 1. Runs [fork functions](#fork-functions) to transform ambient for the child
-2. Serializes the forked context into a [Signal](../glossary.md#signal) payload
-3. Sends the signal to the child agent
+2. Flattens and serializes the forked context into `SpawnAgent` opts
+3. Starts the child agent with that startup context
 
 The child processes this context through its own strategy, then sends the result
 back as a signal to the parent. The parent stores the child's result under the

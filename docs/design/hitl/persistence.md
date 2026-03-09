@@ -5,55 +5,22 @@ input, rate limits, async completion, external jobs — the pause may last
 milliseconds or months. This document describes how agent state is preserved
 across pauses and how flows resume after process termination.
 
-## Three-Tier Resource Management
+## Resource Management Tiers
 
-The persistence model has three tiers, each trading memory for resume latency:
+The runtime has two effective persistence tiers plus a forward-compatible
+hibernate intent flag.
 
-```mermaid
-stateDiagram-v2
-    state "Live Wait" as live
-    state "OTP Hibernate" as otp
-    state "Full Checkpoint" as checkpoint
-    state "Resumed" as resumed
+| Tier                 | Trigger                                    | Process alive? | Memory                            | Resume Latency |
+| -------------------- | ------------------------------------------ | -------------- | --------------------------------- | -------------- |
+| **Live wait**        | Suspension starts                          | Yes            | Full agent struct                 | Instant        |
+| **Hibernate intent** | `Suspend.hibernate` (`true` or `%{after}`) | Yes            | Unchanged (current runtime no-op) | Instant        |
+| **Full checkpoint**  | Suspension timeout >= `hibernate_after`    | No (stopped)   | Zero (on disk)                    | Thaw + start   |
 
-    [*] --> live : flow suspends
-    live --> resumed : resume signal arrives quickly
-    live --> otp : hibernate_after (short)
-    otp --> resumed : resume signal arrives
-    otp --> checkpoint : checkpoint_after (longer)
-    checkpoint --> resumed : thaw + resume
-    resumed --> [*] : flow continues
-```
-
-| Tier                | Trigger                              | Process alive?     | Memory            | Resume Latency  |
-| ------------------- | ------------------------------------ | ------------------ | ----------------- | --------------- |
-| **Live wait**       | Suspension starts                    | Yes                | Full agent struct | Instant         |
-| **OTP hibernate**   | `hibernate_after` (short, e.g. 30s)  | Yes (minimal heap) | GC'd, compressed  | Sub-millisecond |
-| **Full checkpoint** | `checkpoint_after` (longer, e.g. 5m) | No (stopped)       | Zero (on disk)    | Thaw + start    |
-
-### OTP Hibernate
-
-Erlang's `:proc_lib.hibernate/3` compresses the process heap. The process
-remains alive and can receive messages, but uses minimal memory. This is the
-middle tier — faster than full checkpoint for moderate waits, cheaper than
-keeping full state in memory.
-
-The Suspend directive's `hibernate` field controls this: `true` for immediate
-OTP hibernate, `%{after: ms}` for delayed hibernate.
-
-### Full Checkpoint
-
-When `checkpoint_after` fires (or `hibernate_after` in the original two-tier
-model), the strategy emits directives to checkpoint state via
-`Jido.Persist.hibernate/2` and stop the process. A shorter threshold saves
-memory at the cost of resume latency; a longer one favours responsiveness.
+`Suspend.hibernate` (`false`, `true`, `%{after: ms}`) is currently intent-only
+in AgentServer integration; durable memory reduction is performed by
+`CheckpointAndStop` when suspension timeout is `>= hibernate_after`.
 
 ### CheckpointAndStop Directive
-
-When a suspension timeout exceeds the configured `hibernate_after` threshold,
-the strategy appends a `CheckpointAndStop` directive. This directive bridges
-the strategy layer (pure) and the runtime (impure) — the strategy decides
-_when_ to checkpoint, and the directive handles the side effects.
 
 At runtime, the `DirectiveExec` protocol implementation:
 
@@ -62,21 +29,19 @@ At runtime, the `DirectiveExec` protocol implementation:
 3. Notifies the parent by sending a `"composer.child.hibernated"` signal
 4. Returns a stop tuple to terminate the process
 
-The directive struct carries three fields:
+Directive fields:
 
-| Field             | Type                        | Purpose                                            |
-| ----------------- | --------------------------- | -------------------------------------------------- |
-| `suspension`      | `Suspension.t()` (required) | The active suspension that triggered checkpointing |
-| `storage_config`  | `map()` \| nil              | Optional override for storage backend              |
-| `checkpoint_data` | `map()` \| nil              | Optional additional data to include in checkpoint  |
+| Field             | Type                        | Purpose                                                                            |
+| ----------------- | --------------------------- | ---------------------------------------------------------------------------------- |
+| `suspension`      | `Suspension.t()` (required) | The active suspension that triggered checkpointing                                 |
+| `storage_config`  | `map()` \| nil              | Optional override for storage backend                                              |
+| `checkpoint_data` | `map()` \| nil              | Reserved field for storage-specific metadata (currently not read by DirectiveExec) |
 
 ### DirectiveExec Protocol
 
-Both `Suspend` and `CheckpointAndStop` implement the
-`Jido.AgentServer.DirectiveExec` protocol. This is the extension point that
-allows jido_composer to introduce custom directives without modifying jido
-core — the protocol uses `@fallback_to_any true`, so unknown directives are
-safely ignored.
+Both `Suspend` and `CheckpointAndStop` implement
+`Jido.AgentServer.DirectiveExec`, allowing composer-specific directives without
+changing jido core (`@fallback_to_any true` keeps unknown directives safe).
 
 | Directive             | Behaviour                                                                                                                                   |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -140,16 +105,16 @@ creating a fresh agent.
 
 A Composer checkpoint extends the base `Jido.Persist` format:
 
-| Field                  | Source       | Purpose                                                             |
-| ---------------------- | ------------ | ------------------------------------------------------------------- |
-| `version`              | Jido.Persist | Schema version for migration (current: 1)                           |
-| `checkpoint_schema`    | Composer     | `:composer_v1`                                                      |
-| `agent_module`         | Jido.Persist | The agent's module                                                  |
-| `id`                   | Jido.Persist | The agent's unique ID                                               |
-| `status`               | Composer     | `:hibernated` \| `:resuming` \| `:resumed`                          |
-| `state`                | Jido.Persist | Full `agent.state` including `__strategy__`                         |
-| `thread`               | Jido.Persist | Thread pointer `{id, rev}`                                          |
-| `children_checkpoints` | Composer     | Map of `tag => ChildRef` for nested children (with checkpoint keys) |
+| Field                         | Source       | Purpose                                                                             |
+| ----------------------------- | ------------ | ----------------------------------------------------------------------------------- |
+| `version`                     | Jido.Persist | Schema version for migration (current: 1)                                           |
+| `checkpoint_schema`           | Composer     | `:composer_v1`                                                                      |
+| `agent_module`                | Jido.Persist | The agent's module                                                                  |
+| `id`                          | Jido.Persist | The agent's unique ID                                                               |
+| `status`                      | Storage/CAS  | Lifecycle state used during resume CAS (`:hibernated` -> `:resuming` -> `:resumed`) |
+| `state`                       | Jido.Persist | Full `agent.state` including `__strategy__`                                         |
+| `thread`                      | Jido.Persist | Thread pointer `{id, rev}`                                                          |
+| `state.__strategy__.children` | Composer     | Child refs/phases (`Children` struct or map fallback) used for replay               |
 
 The strategy state within the checkpoint includes `pending_suspension` (the
 active Suspension struct, if any) and `fan_out` (a `FanOut.State` struct with
@@ -162,83 +127,28 @@ Checkpoints use Erlang term serialization (`:erlang.term_to_binary/2` with
 `:compressed`). This is the format already used by `Jido.Storage.File` and
 preserves atoms, module references, and nested data structures natively.
 
-JSON and MsgPack serialization (via jido_signal) are available for export but
-are not the primary checkpoint format, as they require atom-to-string mapping
-and lose type fidelity.
-
-### Large Conversation Handling
-
-Orchestrator conversations can grow to 100KB+. The default approach is eager
-serialization with `:compressed`, which typically achieves 3-5x compression on
-text-heavy data.
-
-For conversations exceeding a configurable threshold (e.g., 1MB), a
-split-storage escape hatch stores the conversation separately under a secondary
-key. The checkpoint stores a reference instead of the full conversation. On
-restore, the conversation is fetched separately and reattached. This is an
-optimization for the persistence layer, not a requirement — the default is
-eager serialization.
+JSON and MsgPack exports are possible, but checkpoint persistence is optimized
+around Erlang term serialization to preserve atoms/modules and avoid lossy
+type conversion.
 
 ## Cascading Checkpoint Protocol
 
-When a nested agent suspends and its `hibernate_after` or `checkpoint_after`
-fires, the cascade propagates inside-out:
+Nested checkpointing is inside-out:
 
-```mermaid
-sequenceDiagram
-    participant Parent as Parent Agent
-    participant Child as Child Agent
-    participant Store as Storage
-
-    Note over Child: Suspension → hibernate_after fires
-    Child->>Store: Checkpoint (strategy state + pending suspension)
-    Child->>Parent: Signal: composer.child.hibernated
-    Note over Child: Process stops
-    Note over Parent: Receives hibernation signal
-    Parent->>Parent: Update ChildRef: status → :paused, checkpoint_key set
-    Note over Parent: Parent's own hibernate_after fires (if configured)
-    Parent->>Store: Checkpoint (strategy state + ChildRef entries)
-    Note over Parent: Process stops
-```
-
-The child checkpoints first because it holds the suspension-specific state. The
-parent then records the child's hibernation in its ChildRef and may checkpoint
-itself independently. The parent does NOT checkpoint just because the child
-did — it only checkpoints when its own threshold fires.
+1. Child suspension crosses `hibernate_after`.
+2. Child persists checkpoint and emits `composer.child.hibernated`.
+3. Parent marks child `ChildRef` as `:paused` (with checkpoint key).
+4. Parent checkpoints only if its own threshold also fires.
 
 ## Top-Down Resume Protocol
 
-When resuming a checkpointed agent tree, restoration proceeds top-down:
+Resume is top-down:
 
-```mermaid
-sequenceDiagram
-    participant Ext as External System
-    participant Store as Storage
-    participant Parent as Parent Agent
-    participant Child as Child Agent
-
-    Ext->>Store: Thaw parent agent
-    Store-->>Ext: Parent agent struct
-    Ext->>Parent: Start AgentServer
-    Note over Parent: Detects ChildRef with status :paused
-    Parent->>Store: Thaw child agent (via checkpoint_key)
-    Store-->>Parent: Child agent struct
-    Parent->>Child: SpawnAgent (from checkpoint)
-    Child-->>Parent: child_started
-    Ext->>Child: Deliver resume signal (suspend_resume)
-    Child->>Child: Resume execution
-    Child->>Parent: emit_to_parent(result)
-    Parent->>Parent: Continue flow
-```
-
-1. The outermost agent is thawed first and started in a new AgentServer
-2. The strategy inspects its `ChildRef` entries and re-spawns children from
-   their checkpoints (those with `status: :paused`)
-3. Each child is started with a fresh PID and a new `__parent__` reference
-   pointing to the (new) parent PID
-4. The resume signal is delivered to the innermost suspended agent (this may be
-   a HITL response, a rate-limit retry, or any other resume trigger)
-5. Results propagate upward through the normal `emit_to_parent` mechanism
+1. Thaw and start the outermost agent.
+2. Re-spawn paused children from their `checkpoint_key`.
+3. Children get fresh PIDs and fresh `__parent__` refs.
+4. Deliver resume signal to the innermost suspended agent.
+5. Results propagate through normal `emit_to_parent`.
 
 ### Strategy Init Restoration
 
@@ -285,24 +195,12 @@ Agent modules implement `checkpoint/2` and `restore/2` callbacks (from
 
 ## Handling In-Flight Operations
 
-At checkpoint time, some operations may be in-flight:
+At checkpoint time, in-flight operations are restored from persisted state:
 
-| In-Flight Operation                    | Handling                                                                    |
-| -------------------------------------- | --------------------------------------------------------------------------- |
-| RunInstruction emitted, result pending | Re-emit on resume (instruction is idempotent or recorded in strategy state) |
-| LLM HTTP request in progress           | Lost on process stop; re-issued from conversation history on resume         |
-| Signal sent but not delivered          | Lost; strategy's phase tracking determines what to re-send                  |
-| Child agent still executing            | Stopped before parent checkpoints (or checkpointed independently)           |
-
-The strategy tracks its phase within child communication to determine what to
-replay on resume:
-
-| Phase              | On Resume                           |
-| ------------------ | ----------------------------------- |
-| `:spawning`        | Re-emit SpawnAgent                  |
-| `:started`         | Re-send context signal              |
-| `:context_sent`    | Re-send context signal (idempotent) |
-| `:awaiting_result` | Re-spawn child from checkpoint      |
+- Pending `RunInstruction`/tool work is replayed by strategy callbacks.
+- In-flight HTTP/signals are not durable and are re-issued when needed.
+- Child replay is phase-driven: `:spawning` re-emits `SpawnAgent`,
+  `:awaiting_result` keeps waiting.
 
 ### Replay Directives
 
@@ -320,12 +218,13 @@ callback via `function_exported?/3` (see "Strategy Checkpoint Protocol" in `Chec
 This keeps replay logic co-located with the strategy that owns the state shape.
 For `Orchestrator.Strategy`, it inspects the strategy status:
 
-| Status                         | Replay Behaviour                                               |
-| ------------------------------ | -------------------------------------------------------------- |
-| `:awaiting_llm`                | Re-emit the LLM call from conversation state                   |
-| `:awaiting_tool`               | Re-dispatch the pending tool call from conversation history    |
-| `:awaiting_tools`              | Re-dispatch all pending tool calls                             |
-| `:awaiting_tools_and_approval` | Re-dispatch pending tool calls (gated calls await re-approval) |
+| Status                           | Replay Behaviour                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------- |
+| `:awaiting_llm`                  | Re-emit the LLM call from conversation state                                 |
+| `:awaiting_tool`                 | Re-dispatch pending tool calls (legacy status retained for compatibility)    |
+| `:awaiting_tools`                | Re-dispatch all pending tool calls                                           |
+| `:awaiting_tools_and_approval`   | Re-dispatch pending tool calls (gated calls await re-approval)               |
+| `:awaiting_tools_and_suspension` | Re-dispatch pending tool calls; suspended calls continue through resume flow |
 
 `Resume.resume/4` automatically prepends replay directives when it detects
 `checkpoint_status` in strategy state, ensuring in-flight operations are

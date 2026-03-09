@@ -48,9 +48,9 @@ flowchart LR
     OA -->|AgentNode| O
 ```
 
-This creates a closed algebra: the output type of composition (Agent) is the
-same as one of its input types (AgentNode wraps Agent). There is no special
-case for "composed agents" vs "primitive agents" — they are the same thing.
+This creates a closed composition algebra: outputs are Agents, and Agents are
+valid inputs via AgentNode. There is no special-case type for nested
+compositions.
 
 ## Workflow Interface
 
@@ -83,7 +83,7 @@ use Jido.Composer.Workflow,
   nodes:       map           — state-to-node bindings
   transitions: map           — FSM transition rules
   initial:     atom          — starting state
-  terminal:    list(atom)    — terminal states (default: [:done, :failed])
+  terminal_states: list(atom) — terminal states (default: [:done, :failed])
   ambient:     list(atom)    — context keys extracted into the ambient layer
   fork_fns:    keyword       — MFA tuples applied at agent boundaries
 ```
@@ -163,9 +163,8 @@ graph TB
     end
 ```
 
-There is no restriction on which pattern can contain which. The parent does not
-inspect the child's strategy — it only sees the Node interface (`context in,
-context out`).
+There is no restriction on containment direction. Parents interact only through
+the Node contract (`context in -> context out`), not child internals.
 
 ### What Makes This Work
 

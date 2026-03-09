@@ -71,23 +71,8 @@ The Workflow Strategy declares the following signal routes:
 
 ## Command Actions
 
-The strategy dispatches on the instruction's `action` field. When RunInstruction
-completes, the runtime routes the result back as a `Jido.Instruction` struct
-(not a raw tuple). The execution payload has this structure:
-
-```
-%Jido.Instruction{
-  action: :workflow_node_result,
-  params: %{
-    status: :ok | :error,
-    result: result_map,        # on success
-    reason: exception,         # on error
-    effects: [],
-    instruction: original_instruction,
-    meta: %{}
-  }
-}
-```
+The strategy dispatches by `instruction.action`; runtime results arrive as
+`Jido.Instruction` payloads (not raw tuples).
 
 The strategy pattern-matches on `instruction.action` to dispatch:
 
@@ -96,7 +81,7 @@ The strategy pattern-matches on `instruction.action` to dispatch:
 | `:workflow_start`         | External signal          | Initialize machine context, dispatch first node                                                                     |
 | `:workflow_node_result`   | RunInstruction result    | Scope result under state name, extract outcome, apply transition, dispatch next node                                |
 | `:workflow_child_result`  | Child agent signal       | Same as node_result but for AgentNode results                                                                       |
-| `:workflow_child_started` | SpawnAgent confirmation  | Send context to child as signal                                                                                     |
+| `:workflow_child_started` | SpawnAgent confirmation  | Register child lifecycle metadata (`Children.register_started/3`)                                                   |
 | `:workflow_child_exit`    | Child process terminated | Handle unexpected exit or cleanup                                                                                   |
 | `:fan_out_branch_result`  | FanOut branch completed  | Store branch result, check if all branches done, merge and transition                                               |
 | `:suspend_resume`         | Resume signal            | Validate suspension, merge resume data, transition with outcome                                                     |
@@ -144,8 +129,7 @@ sequenceDiagram
     AgentServer->>Child: start child agent
     Child-->>AgentServer: child_started signal
     AgentServer->>Strategy: cmd(:workflow_child_started)
-    Strategy->>AgentServer: Emit signal to child (context as payload)
-    AgentServer->>Child: signal with context
+    Note over Strategy,Child: Child startup context is already in SpawnAgent opts
     Child->>Child: run own strategy
     Child->>AgentServer: emit_to_parent(result signal)
     AgentServer->>Strategy: cmd(:workflow_child_result, result)

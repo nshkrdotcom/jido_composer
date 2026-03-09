@@ -206,9 +206,6 @@ defmodule JidoComposer.MixProject do
         "docs/design/observability.md",
         # Design: Testing
         "docs/design/testing.md",
-        # Design: Limitations
-        "docs/design/limitations/parent-ref-pid-stripping.md",
-        "docs/design/limitations/otp-hibernate-support.md",
         # Reference
         "PLAN.md"
       ],

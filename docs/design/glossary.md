@@ -78,7 +78,8 @@ Jido Agent wired to the appropriate [Strategy](#strategy).
 
 An enforcement mechanism in the [Orchestrator](#orchestrator) that intercepts
 [tool calls](#tool) requiring human approval **before** execution. Configured
-via per-tool metadata or a dynamic policy function. See
+via per-tool metadata (`requires_approval`) and optional runtime policy
+functions in strategy options. See
 [Strategy Integration — Orchestrator Approval Gate](hitl/strategy-integration.md#orchestrator-approval-gate).
 
 ### ApprovalRequest
@@ -146,12 +147,10 @@ RunInstruction directives. Defined in `Jido.Instruction`.
 
 ### LLM Integration (LLMAction)
 
-An internal Jido Action (Jido.Composer.Orchestrator.LLMAction) that calls
-[req_llm](https://hexdocs.pm/req_llm) directly for provider-agnostic LLM
-generation. Supports four modes: `generate_text`, `generate_object`,
-`stream_text`, `stream_object`. The [Orchestrator](#orchestrator) strategy
-wraps LLMAction in a RunInstruction directive -- it never calls ReqLLM directly.
-There is no facade module and no `@behaviour` enforcement. See
+Internal action (Jido.Composer.Orchestrator.LLMAction) that calls
+[req_llm](https://hexdocs.pm/req_llm) directly for text generation
+(`generate_text` / `stream_text`). The [Orchestrator](#orchestrator) emits it
+via RunInstruction; there is no facade layer. See
 [LLM Integration](orchestrator/llm-integration.md).
 
 ### Machine
@@ -172,7 +171,7 @@ See [Typed I/O](nodes/typed-io.md).
 
 The uniform interface all [Workflow](#workflow) and [Orchestrator](#orchestrator)
 participants implement. A node is a function from context to context:
-`run(context, opts) -> {:ok, context} | {:ok, context, outcome} | {:error, reason}`.
+`run(node, context, opts) -> {:ok, context} | {:ok, context, outcome} | {:error, reason}`.
 See [Nodes](nodes/README.md).
 
 ### Obs

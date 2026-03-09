@@ -83,11 +83,10 @@ on success, the action's return value becomes the structured result wrapped as
 result so it can retry. See [Strategy — Termination Tool](strategy.md#termination-tool)
 for the interception mechanism.
 
-## Parameter Flow: DSL to Strategy State to LLMAction
+## Parameter Flow: DSL -> Strategy State -> LLMAction
 
-LLM parameters flow from the DSL declaration through strategy state into
-LLMAction's instruction params as flat keys. There is no nested `opts` map and
-no module dispatch.
+LLM parameters flow from DSL options into strategy state, then into flat
+LLMAction instruction params (no nested dispatch layer).
 
 ```mermaid
 flowchart LR
@@ -116,20 +115,11 @@ flowchart LR
 | `nodes`            | list                | (required) | Available nodes (actions and agents)                                                                      |
 | `max_iterations`   | integer             | `10`       | Safety limit on the ReAct loop                                                                            |
 
-### Strategy State Fields (LLM-related)
+### Strategy LLM Fields
 
-| Field                   | Type                 | Source                  |
-| ----------------------- | -------------------- | ----------------------- |
-| `model`                 | `String.t()`         | DSL `model:`            |
-| `temperature`           | `float \| nil`       | DSL `temperature:`      |
-| `max_tokens`            | `integer \| nil`     | DSL `max_tokens:`       |
-| `stream`                | boolean              | DSL `stream:`           |
-| `termination_tool_name` | `String.t() \| nil`  | Derived from DSL module |
-| `termination_tool_mod`  | module \| nil        | DSL `termination_tool:` |
-| `llm_opts`              | keyword              | DSL `llm_opts:`         |
-| `req_options`           | keyword              | DSL `req_options:`      |
-| `system_prompt`         | `String.t() \| nil`  | DSL `system_prompt:`    |
-| `conversation`          | `ReqLLM.Context.t()` | Managed at runtime      |
+Key fields carried in strategy state: `model`, `temperature`, `max_tokens`,
+`stream`, `llm_opts`, `req_options`, `system_prompt`, `conversation`, and
+termination-tool metadata (`termination_tool_name`, `termination_tool_mod`).
 
 ### LLMAction Instruction Params
 
@@ -210,68 +200,18 @@ that serializes natively via `:erlang.term_to_binary/2`.
 
 ## Req Options
 
-The `req_options` parameter flows from the DSL through strategy state into
-LLMAction, where `build_req_llm_opts/2` maps it to req_llm's
-`:req_http_options` key. This enables
-[cassette-based testing](../testing.md#reqcassette-integration) without any
-special test-mode logic.
-
-| Strategy Key   | req_llm Key         | Purpose                               |
-| -------------- | ------------------- | ------------------------------------- |
-| `:req_options` | `:req_http_options` | Merged into Req HTTP calls by req_llm |
-
-```mermaid
-flowchart LR
-    Strategy["Orchestrator Strategy"]
-    LLMAction["LLMAction"]
-    ReqLLM["req_llm"]
-    Req["Req HTTP"]
-
-    Strategy -->|"params[:req_options]"| LLMAction
-    LLMAction -->|"req_http_options:"| ReqLLM
-    ReqLLM -->|"plug: ..."| Req
-```
-
-The strategy passes `req_options` through opaquely -- it never inspects or
-modifies them. LLMAction performs the key mapping from `:req_options` to
-`:req_http_options`.
+`req_options` flows from DSL -> strategy -> LLMAction, where it is mapped to
+req_llm `:req_http_options`. Strategy treats it as opaque pass-through, which
+enables cassette/test plug injection without test-specific branches.
 
 ## Execution Flow
 
-```mermaid
-sequenceDiagram
-    participant Strategy as Orchestrator Strategy
-    participant Runtime as AgentServer Runtime
-    participant LLMAction as LLMAction
-    participant ReqLLM as req_llm
-    participant Tool as AgentTool
-    participant Node as Node
+Per ReAct turn:
 
-    Strategy->>Tool: to_tool(node) for each available node
-    Tool-->>Strategy: [ReqLLM.Tool structs]
-    Strategy-->>Runtime: RunInstruction(LLMAction, params)
-    Runtime->>LLMAction: run(params, context)
-    LLMAction->>ReqLLM: generate_text(model, context, opts)
-    ReqLLM-->>LLMAction: {:ok, %ReqLLM.Response{}}
-    LLMAction->>LLMAction: classify response
-    LLMAction-->>Runtime: {:ok, %{response: {:tool_calls, calls}, conversation: ctx}}
-    Runtime->>Strategy: cmd(:orchestrator_llm_result)
-    Strategy->>Tool: to_context(call)
-    Tool-->>Strategy: node context
-    Strategy-->>Runtime: RunInstruction(action)
-    Runtime->>Node: run(context, opts)
-    Node-->>Runtime: {:ok, result_context}
-    Runtime->>Strategy: cmd(:orchestrator_tool_result)
-    Strategy->>Strategy: collect tool_results
-    Strategy-->>Runtime: RunInstruction(LLMAction, params with tool_results)
-    Runtime->>LLMAction: run(params, context)
-    LLMAction->>LLMAction: append tool_result messages to context
-    LLMAction->>ReqLLM: generate_text(model, updated_context, opts)
-    ReqLLM-->>LLMAction: {:ok, %ReqLLM.Response{}}
-    LLMAction-->>Runtime: {:ok, %{response: {:final_answer, text}, conversation: ctx}}
-    Runtime->>Strategy: cmd(:orchestrator_llm_result)
-    Strategy->>Strategy: done
-```
+1. Strategy emits `RunInstruction(LLMAction)`.
+2. LLMAction calls req_llm and classifies response (`tool_calls` or `final_answer`).
+3. Strategy dispatches tool calls, collects normalized tool results.
+4. Strategy re-emits LLMAction with updated conversation + tool results, until completion.
 
 ## Testing
 

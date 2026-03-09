@@ -112,7 +112,7 @@ All user-facing modules live under this namespace:
 | `Jido.Composer.Workflow.Machine`       | [FSM data structure](workflow/state-machine.md)                                                         |
 | `Jido.Composer.Orchestrator`           | [Orchestrator DSL](orchestrator/README.md) macro                                                        |
 | `Jido.Composer.Orchestrator.Strategy`  | [Orchestrator strategy](orchestrator/strategy.md)                                                       |
-| Jido.Composer.Orchestrator.LLMAction   | [LLM integration](orchestrator/llm-integration.md) calling ReqLLM directly                              |
+| Jido.Composer.Orchestrator.LLMAction   | [LLM integration](orchestrator/llm-integration.md) calling ReqLLM directly (hidden module)              |
 | `Jido.Composer.Orchestrator.AgentTool` | [Node-to-tool adapter](orchestrator/README.md#agenttool-adapter)                                        |
 | `Jido.Composer.OtelCtx`                | [OTel context management](observability.md#otelctx)                                                     |
 | `Jido.Composer.Orchestrator.Obs`       | [Orchestrator observability state](observability.md#obs-structs)                                        |
@@ -169,27 +169,13 @@ Strategy state lives under `agent.state.__strategy__` and is managed via
 `Jido.Agent.Strategy.State` helpers. This keeps all state within the immutable
 Agent struct for serializability and snapshot/restore.
 
-### Strategy Status Lifecycle
+Strategy statuses are strategy-specific:
 
-```mermaid
-stateDiagram-v2
-    [*] --> idle
-    idle --> running : cmd received
-    running --> waiting : awaiting external result
-    running --> waiting : node returns :suspend (any reason)
-    waiting --> running : result received
-    waiting --> running : resume signal received
-    running --> success : completed successfully
-    running --> failure : error occurred
-    success --> [*]
-    failure --> [*]
-```
+- Workflow uses a compact FSM-oriented lifecycle (`:idle`, `:running`, `:waiting`, terminal states).
+- Orchestrator uses richer waiting states (`:awaiting_llm`, `:awaiting_tools`, `:awaiting_approval`, etc.).
 
-The `:waiting` status serves double duty: it represents both "awaiting an
-external action result" (e.g., a RunInstruction callback) and "awaiting a
-[suspension](hitl/README.md) resume" (human input, rate limit backoff, async
-completion, etc.). The strategy's internal state distinguishes these cases via
-the `pending_suspension` field.
+See [Workflow Strategy](workflow/strategy.md) and
+[Orchestrator Strategy](orchestrator/strategy.md) for exact state machines.
 
 ## Directive System
 
@@ -230,18 +216,8 @@ matching route, it produces a `RoutingError`. The only built-in route is
 routes for all signal types it handles, and the DSL must auto-generate these
 routes from the declared nodes and transitions.
 
-Signal routes have a priority system:
-
-| Source   | Default Priority | Range      |
-| -------- | ---------------- | ---------- |
-| Strategy | 50               | 50–100     |
-| Agent    | 0                | -25 to 25  |
-| Plugin   | -10              | -50 to -10 |
-
 Routes use the pattern `{"signal.type", {:strategy_cmd, :atom_action}}`, which
-translates to calling `cmd(agent, {:atom_action, signal.data})`. The strategy
-receives the signal data as an instruction with `action: :atom_action` and
-`params: signal.data`.
+dispatches signal payload to strategy `cmd/3` as instruction params.
 
 Composer strategies declare routes for workflow and orchestrator-specific signal
 types (e.g., `composer.workflow.start`, `composer.orchestrator.query`), plus

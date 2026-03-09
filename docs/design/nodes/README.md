@@ -70,58 +70,10 @@ types for compile-time compatibility checking. See
 
 ## Node Types
 
-```mermaid
-classDiagram
-    class Node {
-        <<behaviour>>
-        +run(node, context, opts) result
-        +name(node) String
-        +description(node) String
-        +to_directive(node, flat_context, opts) directive_result
-        +to_tool_spec(node) map | nil
-        +schema(node) keyword | nil
-    }
-
-    class ActionNode {
-        action_module : module
-        opts : keyword
-        +new(action_module, opts)
-    }
-
-    class AgentNode {
-        agent_module : module
-        mode : :sync | :async | :streaming
-        opts : keyword
-        signal_type : String | nil
-        on_state : list(atom) | nil
-        +new(agent_module, opts)
-    }
-
-    class HumanNode {
-        name : String
-        prompt : String | function
-        allowed_responses : list(atom)
-        response_schema : keyword | nil
-        timeout : integer | :infinity
-        context_keys : list(atom) | nil
-        +new(opts)
-    }
-
-    class FanOutNode {
-        name : String
-        branches : map(atom => Node)
-        merge : function | :deep_merge
-        timeout : integer | :infinity
-        on_error : :fail_fast | :collect_partial
-        max_concurrency : integer | :infinity
-        +new(opts)
-    }
-
-    Node <|.. ActionNode
-    Node <|.. AgentNode
-    Node <|.. HumanNode
-    Node <|.. FanOutNode
-```
+- `ActionNode`: wraps a `Jido.Action` as a Node.
+- `AgentNode`: wraps a `Jido.Agent` with sync/async/streaming execution modes.
+- `HumanNode`: emits `:suspend` for human approval/decision.
+- `FanOutNode`: runs named branches concurrently and merges results.
 
 ### ActionNode
 
@@ -129,13 +81,8 @@ A thin adapter that wraps any `Jido.Action` module as a Node. Since actions
 already conform to a `(params, context) -> {:ok, map()}` contract, the adapter
 primarily handles [context accumulation](context-flow.md) via deep merge.
 
-The adapter delegates metadata to the wrapped action:
-
-| Node Callback   | Delegates To                  |
-| --------------- | ----------------------------- |
-| `name/0`        | `action_module.name()`        |
-| `description/0` | `action_module.description()` |
-| `schema/0`      | `action_module.schema()`      |
+The adapter delegates `name/1`, `description/1`, and `schema/1` to the wrapped
+action module.
 
 When the Workflow strategy encounters an ActionNode, it emits a
 [RunInstruction](../glossary.md#directive) directive containing the action
@@ -155,23 +102,16 @@ per-instance configuration:
 | `signal_type`  | `String.t()` \| nil                 | Signal type to send when delivering context (defaults to agent convention) |
 | `on_state`     | `[atom()]` \| nil                   | FSM states that emit events upstream (streaming mode only)                 |
 
-AgentNode supports three communication modes for different use cases:
+AgentNode supports three configuration modes for directive-based execution:
 
-| Mode              | Behaviour                                            | Outcome                                           |
-| ----------------- | ---------------------------------------------------- | ------------------------------------------------- |
-| `:sync` (default) | Spawns agent, sends context as signal, awaits result | `{:ok, merged_context}`                           |
-| `:async`          | Spawns agent, returns immediately                    | `{:ok, context, :pending}` with handle in context |
-| `:streaming`      | Spawns agent, subscribes to state transitions        | Events emitted at specified FSM states            |
+| Mode              | `run/3` Behaviour                                   | Directive Path Behaviour                               |
+| ----------------- | --------------------------------------------------- | ------------------------------------------------------ |
+| `:sync` (default) | Calls child `run_sync/2` or `query_sync/3` directly | Strategy may still choose SpawnAgent lifecycle         |
+| `:async`          | Returns execution error (`not directly runnable`)   | SpawnAgent lifecycle, parent does not block            |
+| `:streaming`      | Returns execution error (`not directly runnable`)   | SpawnAgent lifecycle with upstream state notifications |
 
-The `signal_type` field controls which signal type the parent sends when
-delivering context to the child. When nil, the parent uses the child agent's
-conventional signal type. This is useful when a single agent module handles
-multiple signal types for different purposes.
-
-The `on_state` field is only relevant in streaming mode. It specifies which of
-the child agent's FSM states should trigger an event emission to the parent.
-This allows the parent to observe intermediate progress without waiting for full
-completion.
+`signal_type` overrides the default signal sent to children; `on_state` (streaming
+mode) controls which child states emit upstream events.
 
 #### Dual-Path Execution
 
@@ -182,15 +122,9 @@ AgentNode has two execution paths that coexist:
 | `run/3` (sync)       | FanOutNode branches, `run_sync`, testing | Delegates to child's `run_sync` or `query_sync` |
 | SpawnAgent directive | AgentServer runtime, async, streaming    | Full process lifecycle via signals              |
 
-In sync mode, `run/3` delegates to the child agent's existing `run_sync/2` or
-`query_sync/3` functions (which the DSLs generate). This ensures AgentNode
-satisfies the [Node contract](#contract) — it is a valid morphism in the
-composition monoid. See
-[Foundations — Nesting](../foundations.md#nesting-as-functorial-embedding).
-
-The dual-path principle means FanOutNode branches can be AgentNodes (the branch
-calls `run/3`), while the strategy can still use SpawnAgent for process-based
-lifecycle management.
+In sync mode, `run/3` calls child `run_sync/2` or `query_sync/3`, so AgentNodes
+can execute inside FanOut branches while strategies still use SpawnAgent for
+process lifecycle management.
 
 #### `execute_child_sync` vs `AgentNode.run/3`
 
@@ -207,10 +141,8 @@ the Node contract (output must be a map). `execute_child_sync` passes the raw
 responsible for adaptation via
 [`resolve_result/1`](typed-io.md#mergeable-check).
 
-This means orchestrator children in workflows produce bare strings (from
-`unwrap_result(NodeIO.text(...))`) that flow into `Machine.apply_result`. The
-Machine's `resolve_result/1` handles this by wrapping strings as
-`%{text: value}` — see [Typed I/O — Mergeable Check](typed-io.md#mergeable-check).
+In practice, orchestrator children in workflows may return bare strings; the
+Machine adapts these through `resolve_result/1` (string -> `%{text: value}`).
 
 **Sync mode** is the primary mode for [Workflow](../workflow/README.md)
 composition:
@@ -263,14 +195,14 @@ appears as a single state to the FSM but internally spawns multiple branches.
 
 FanOutNode carries per-instance configuration:
 
-| Field             | Type                                  | Purpose                                                        |
-| ----------------- | ------------------------------------- | -------------------------------------------------------------- |
-| `name`            | `String.t()`                          | Node identifier                                                |
-| `branches`        | `%{atom => Node.t()}`                 | Named child nodes to execute concurrently                      |
-| `merge`           | `(results -> map())` \| `:deep_merge` | Strategy for combining branch results (default: `:deep_merge`) |
-| `timeout`         | `pos_integer()` \| `:infinity`        | Maximum wait time for all branches (default: 30_000)           |
-| `on_error`        | `:fail_fast` \| `:collect_partial`    | Error handling policy (default: `:fail_fast`)                  |
-| `max_concurrency` | `pos_integer()` \| `:infinity`        | Maximum branches running simultaneously (default: `:infinity`) |
+| Field             | Type                                        | Purpose                                                         |
+| ----------------- | ------------------------------------------- | --------------------------------------------------------------- |
+| `name`            | `String.t()`                                | Node identifier                                                 |
+| `branches`        | `[{atom(), Node.t() \| (map() -> result)}]` | Named child branches (keyword-list style) executed concurrently |
+| `merge`           | `(results -> map())` \| `:deep_merge`       | Strategy for combining branch results (default: `:deep_merge`)  |
+| `timeout`         | `pos_integer()` \| `:infinity`              | Maximum wait time for all branches (default: 30_000)            |
+| `on_error`        | `:fail_fast` \| `:collect_partial`          | Error handling policy (default: `:fail_fast`)                   |
+| `max_concurrency` | `pos_integer()` \| `nil`                    | Maximum branches running simultaneously (default: unbounded)    |
 
 #### Directive-Based Execution
 
@@ -279,26 +211,10 @@ individual `FanOutBranch` directives — one per branch. This keeps the strategy
 pure (no inline `Task.async_stream`) and enables branches to be any node type,
 including AgentNodes.
 
-```mermaid
-flowchart TB
-    FO["FanOutNode<br/>(3 branches)"]
-    B1["FanOutBranch<br/>:fast_check → ActionNode"]
-    B2["FanOutBranch<br/>:analysis → AgentNode"]
-    B3["FanOutBranch<br/>:review → ActionNode"]
-    MERGE["Merge results"]
+Each branch becomes a `FanOutBranch` directive:
 
-    FO --> B1
-    FO --> B2
-    FO --> B3
-    B1 --> MERGE
-    B2 --> MERGE
-    B3 --> MERGE
-```
-
-| Branch type | Directive content                                       |
-| ----------- | ------------------------------------------------------- |
-| ActionNode  | RunInstruction with action module and flattened context |
-| AgentNode   | SpawnAgent with forked context (fork functions applied) |
+- Action branch -> `RunInstruction` with flattened context
+- Agent branch -> `SpawnAgent` with forked child context
 
 The strategy tracks pending branches and collects results as they arrive. When
 all branches complete, results are merged and the FSM transitions.

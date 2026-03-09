@@ -1,11 +1,8 @@
 # Observability
 
 Jido Composer instruments both [Workflow](workflow/README.md) and
-[Orchestrator](orchestrator/README.md) strategies with coarse-grained
-OpenTelemetry spans. Spans are emitted via `Jido.Observe` (from the core `jido`
-library), which fires `:telemetry` events and delegates to a pluggable tracer
-callback. When configured with `AgentObs.JidoTracer`, these events become real
-OTel spans exported to Arize Phoenix or any OpenTelemetry-compatible backend.
+[Orchestrator](orchestrator/README.md) through `Jido.Observe`, emitting
+`:telemetry` events that an optional tracer maps to OpenTelemetry spans.
 
 ## Design Goals
 
@@ -110,23 +107,16 @@ span B from becoming a child of span A's context.
 
 ### Obs Structs
 
-Each strategy type has a dedicated Obs struct that holds active span contexts
-and accumulates measurements. The strategy stores a single `_obs` field
-containing this struct.
+Each strategy type has a dedicated Obs struct that tracks active spans and
+measurements in strategy state (`_obs`).
 
 | Module             | Fields                                                                        | Responsibility                                                                                |
 | ------------------ | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `Orchestrator.Obs` | `agent_span`, `llm_span`, `tool_spans`, `iteration_span`, `cumulative_tokens` | Span lifecycle for all orchestrator span types, token accumulation, LLM message normalization |
 | `Workflow.Obs`     | `agent_span`, `node_span`                                                     | Span lifecycle for agent and node spans                                                       |
 
-The Obs structs are pure data — all functions take an `%Obs{}` and return an
-updated `%Obs{}`. The strategy interacts with Obs through a single helper:
-
-```
-update_obs(agent, &Obs.start_tool_span(&1, call))
-```
-
-This keeps strategy `cmd/3` clauses free of span lifecycle details.
+Obs helpers are pure (`%Obs{} -> %Obs{}`), so `cmd/3` stays focused on control
+flow while span lifecycle logic stays encapsulated in Obs modules.
 
 ### OtelCtx
 
@@ -145,7 +135,7 @@ the library works without OpenTelemetry as a dependency.
 
 ### Jido.Observe
 
-The core `jido` library provides the span API that Obs structs call:
+The Obs modules call a small span API from core `jido`:
 
 | Function                                                | Telemetry Events         |
 | ------------------------------------------------------- | ------------------------ |
@@ -153,9 +143,8 @@ The core `jido` library provides the span API that Obs structs call:
 | `finish_span(span_ctx, measurements)`                   | `prefix ++ [:stop]`      |
 | `finish_span_error(span_ctx, kind, reason, stacktrace)` | `prefix ++ [:exception]` |
 
-`start_span` returns an opaque `span_ctx` that carries the start timestamp and
-tracer-specific context. `finish_span` computes duration and emits the stop
-event.
+`start_span` returns opaque context; `finish_span` closes it and emits stop
+events with computed duration.
 
 ## Tracer Integration
 
@@ -174,8 +163,7 @@ graph LR
 
 ### AgentObs.JidoTracer
 
-The `AgentObs.JidoTracer` module (in the `agent_obs` package) implements
-`Jido.Observe.Tracer` and maps Jido event prefixes to AgentObs event types:
+`AgentObs.JidoTracer` (from `agent_obs`) maps Jido prefixes to AgentObs types:
 
 | Jido prefix                      | AgentObs type | OpenInference semantic |
 | -------------------------------- | ------------- | ---------------------- |
@@ -184,15 +172,8 @@ The `AgentObs.JidoTracer` module (in the `agent_obs` package) implements
 | `[:jido, :composer, :tool]`      | `:tool`       | Tool span              |
 | `[:jido, :composer, :iteration]` | `:chain`      | Chain span             |
 
-The tracer uses `AgentObs.Handlers.Phoenix.Translator` to convert metadata into
-OpenInference-compatible OTel span attributes, enabling export to Arize Phoenix.
-
-Configuration:
-
-```elixir
-config :jido, :observability,
-  tracer: AgentObs.JidoTracer
-```
+The tracer uses `AgentObs.Handlers.Phoenix.Translator` to emit
+OpenInference-compatible span attributes.
 
 ## Span Measurements
 
@@ -233,18 +214,9 @@ config :jido, :observability,
 ## Checkpoint Serialization
 
 OTel span contexts contain process-local references that are not serializable.
-During checkpoint preparation, `strip_for_checkpoint` replaces the `_obs` field
-with a fresh `Obs.new()`:
-
-```
-{:_obs, _} -> {:_obs, Obs.new()}
-```
-
-This is a single clause in each strategy's `strip_for_checkpoint/1` function.
-After restore, spans are simply not resumed — the agent starts fresh
-observability for its post-restore execution. This is intentional: checkpointed
-agents may resume in a different process, on a different node, or much later in
-time. Attempting to reconnect to stale spans would produce misleading trace data.
+During checkpoint preparation, each strategy's `strip_for_checkpoint/1`
+resets `_obs` to `Obs.new()`. Spans are not resumed after thaw; resumed agents
+start fresh observability in their new runtime context.
 
 ## Ambient Key Sanitization
 

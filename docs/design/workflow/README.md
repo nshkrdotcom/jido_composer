@@ -101,15 +101,16 @@ a map of `{state, outcome}` pairs to next states, and an initial state atom.
 
 ### Compile-Time Validation
 
-The DSL performs two levels of validation at compile time:
+The DSL performs compile-time validation with hard errors and warnings:
 
-| Level       | Check                                                            | Consequence                           |
-| ----------- | ---------------------------------------------------------------- | ------------------------------------- |
-| **Error**   | Transition references a state with no node definition            | Compilation fails                     |
-| **Error**   | Node definition references a state not present in any transition | Compilation fails                     |
-| **Error**   | Initial state is not defined in the nodes map                    | Compilation fails                     |
-| **Warning** | A non-terminal state has no outgoing transitions                 | Compiler warning (potential dead end) |
-| **Warning** | A state is unreachable from the initial state                    | Compiler warning (dead code)          |
+| Level       | Check                                                 | Consequence                                  |
+| ----------- | ----------------------------------------------------- | -------------------------------------------- |
+| **Error**   | Transition references a state with no node definition | Compilation fails                            |
+| **Error**   | Initial state is not defined in the nodes map         | Compilation fails                            |
+| **Warning** | A non-terminal state has no outgoing transitions      | Compiler warning (potential dead end)        |
+| **Warning** | A state is unreachable from the initial state         | Compiler warning (dead code)                 |
+| **Warning** | Transition uses reserved outcome `:suspend`           | Compiler warning (unreachable edge)          |
+| **Warning** | No transition targets any terminal state              | Compiler warning (workflow may not complete) |
 
 Errors prevent the module from compiling, ensuring structural correctness of the
 FSM at build time. Warnings surface potential logic issues without blocking

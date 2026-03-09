@@ -58,8 +58,7 @@ sequenceDiagram
     Server->>Child: start_link (with parent_ref)
     Child-->>Server: child_started signal
     Server->>Parent: cmd(:child_started)
-    Parent->>Server: Emit signal to child (context payload)
-    Server->>Child: deliver signal
+    Note over Parent,Child: Child receives startup context via SpawnAgent opts
     Child->>Child: run own strategy to completion
     Child->>Server: emit_to_parent(result signal)
     Server->>Parent: cmd(:child_result, result)
@@ -108,17 +107,16 @@ entire composition tree.
 
 ### Three-Level Nesting Example
 
-OuterWorkflow -> MiddleOrchestrator -> InnerWorkflow:
+`OuterWorkflow -> MiddleOrchestrator -> InnerWorkflow` preserves the same
+boundary rules at each hop:
 
-1. **Level 1 starts** — Context has `ambient: %{org_id: "acme", trace_id: "abc"}`,
-   `working: %{}`, fork function for OTel span creation
-2. **Level 1 -> 2** (SpawnAgent for MiddleOrchestrator) — Fork function runs,
-   creates child OTel span in ambient. `org_id` unchanged
-3. **Level 2 -> 3** (SpawnAgent for InnerWorkflow) — Fork function runs again,
-   creates grandchild span. `org_id` still unchanged
-4. **Results flow up** — unchanged from today. Child sends result via
-   `emit_to_parent`. Parent scopes under node/tool name in working context.
-   Ambient is never modified
+| Step            | Effect                                                                  |
+| --------------- | ----------------------------------------------------------------------- |
+| Parent -> child | Ambient flows down; fork functions can derive child-specific values     |
+| Child execution | Child mutates its own working layer only                                |
+| Child -> parent | Result returns via `emit_to_parent`, then is scoped into parent working |
+
+Ambient keys (for example `org_id`) remain read-only across all levels.
 
 ## Depth and Recursion
 

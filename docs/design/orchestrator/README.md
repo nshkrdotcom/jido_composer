@@ -82,11 +82,11 @@ flowchart TB
 The AgentTool adapter (`Jido.Composer.Orchestrator.AgentTool`) bridges
 [Nodes](../nodes/README.md) and `ReqLLM.Tool` structs through three operations:
 
-| Operation                                  | Direction             | Description                                                                                                                              |
-| ------------------------------------------ | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `to_tool(node)`                            | Node → Tool           | Extracts `name()`, `description()`, and `schema()` from the node and produces a `ReqLLM.Tool` struct with JSON Schema `parameter_schema` |
-| `to_context(tool_call)`                    | Tool Call → Context   | Converts the LLM's `tool_call.arguments` map into a context map suitable for node execution                                              |
-| `to_result_message(call_id, name, result)` | Node Result → Message | Wraps the node's execution result (or error) as a tool result message for the LLM conversation, correlated by `call_id`                  |
+| Operation                               | Direction             | Description                                                                                                                              |
+| --------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `to_tool(node)`                         | Node → Tool           | Extracts `name()`, `description()`, and `schema()` from the node and produces a `ReqLLM.Tool` struct with JSON Schema `parameter_schema` |
+| `to_context(tool_call)`                 | Tool Call → Context   | Converts the LLM's `tool_call.arguments` map into a context map suitable for node execution                                              |
+| `to_tool_result(call_id, name, result)` | Node Result → Message | Normalizes node execution output as `%{id, name, result}` for the next LLM turn, correlated by `call_id`                                 |
 
 The `to_tool/1` operation reads the node's schema (NimbleOptions or Zoi format)
 and converts it to JSON Schema for the `ReqLLM.Tool` struct's `parameter_schema`
@@ -97,27 +97,46 @@ externally rather than through req_llm's callback mechanism.
 
 The Orchestrator DSL (`use Jido.Composer.Orchestrator`) configures:
 
-| Option                 | Purpose                                                                                                                                                                            |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                 | Agent name (used as tool name when nested)                                                                                                                                         |
-| `description`          | What this orchestrator does (used as tool description when nested)                                                                                                                 |
-| `model`                | req_llm model spec string (e.g. `"anthropic:claude-sonnet-4-20250514"`)                                                                                                            |
-| `nodes`                | List of available nodes (actions and agents)                                                                                                                                       |
-| `system_prompt`        | Instructions for the LLM's decision-making                                                                                                                                         |
-| `max_iterations`       | Safety limit on the ReAct loop (default: 10)                                                                                                                                       |
-| `temperature`          | Sampling temperature (default: nil -- provider default)                                                                                                                            |
-| `max_tokens`           | Maximum tokens in response (default: nil -- provider default)                                                                                                                      |
-| `stream`               | Whether to use streaming generation (default: `false`)                                                                                                                             |
-| `termination_tool`     | A `Jido.Action` module for [structured termination](strategy.md#termination-tool) — LLM calls it to exit the loop with validated structured data (default: nil)                    |
-| `llm_opts`             | Additional options passed through to req_llm (default: `[]`)                                                                                                                       |
-| `req_options`          | Opaque Req HTTP options forwarded to [LLMAction](llm-integration.md#req-options) (default: `[]`)                                                                                   |
-| `approval_policy`      | MFA tuple `(tool_call, context) -> :proceed \| {:require_approval, opts}` for dynamic [approval gating](../hitl/strategy-integration.md#orchestrator-approval-gate) (default: nil) |
-| `max_tool_concurrency` | Maximum simultaneous tool executions per LLM turn (default: `:infinity`). See [Tool Concurrency](strategy.md#tool-concurrency)                                                     |
-| `ambient`              | Context keys extracted into the [ambient layer](../nodes/context-flow.md#context-layers) (default: `[]`)                                                                           |
-| `fork_fns`             | MFA tuples applied at agent boundaries (default: `[]`). See [Fork Functions](../nodes/context-flow.md#fork-functions)                                                              |
+| Option                 | Purpose                                                                                                                                                         |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                 | Agent name (used as tool name when nested)                                                                                                                      |
+| `description`          | What this orchestrator does (used as tool description when nested)                                                                                              |
+| `model`                | req_llm model spec string (e.g. `"anthropic:claude-sonnet-4-20250514"`)                                                                                         |
+| `nodes`                | List of available nodes (actions and agents)                                                                                                                    |
+| `system_prompt`        | Instructions for the LLM's decision-making                                                                                                                      |
+| `max_iterations`       | Safety limit on the ReAct loop (default: 10)                                                                                                                    |
+| `temperature`          | Sampling temperature (default: nil -- provider default)                                                                                                         |
+| `max_tokens`           | Maximum tokens in response (default: nil -- provider default)                                                                                                   |
+| `stream`               | Whether to use streaming generation (default: `false`)                                                                                                          |
+| `termination_tool`     | A `Jido.Action` module for [structured termination](strategy.md#termination-tool) — LLM calls it to exit the loop with validated structured data (default: nil) |
+| `llm_opts`             | Additional options passed through to req_llm (default: `[]`)                                                                                                    |
+| `req_options`          | Opaque Req HTTP options forwarded to [LLMAction](llm-integration.md#req-options) (default: `[]`)                                                                |
+| `max_tool_concurrency` | Maximum simultaneous tool executions per LLM turn (default: unbounded). See [Tool Concurrency](strategy.md#tool-concurrency)                                    |
+| `ambient`              | Context keys extracted into the [ambient layer](../nodes/context-flow.md#context-layers) (default: `[]`)                                                        |
+| `fork_fns`             | MFA tuples applied at agent boundaries (default: `[]`). See [Fork Functions](../nodes/context-flow.md#fork-functions)                                           |
 
 The DSL auto-wraps plain action modules as ActionNodes and agent modules as
 AgentNodes, then generates a Jido Agent wired to the Orchestrator Strategy.
+
+### Approval Gating
+
+Approval gating uses a two-tier mechanism:
+
+1. **Static (DSL):** Mark individual nodes with `requires_approval: true` in the
+   `nodes` list. The DSL extracts these into `gated_nodes` in strategy opts.
+   Also accepts `rejection_policy` to control sibling behavior on rejection
+   (`:continue_siblings` | `:cancel_siblings` | `:abort_iteration`, default:
+   `:continue_siblings`).
+
+2. **Dynamic (runtime):** Pass an `approval_policy` function via strategy opts
+   at runtime. The function `(tool_call, context) -> :proceed | :require_approval`
+   is evaluated at dispatch time for every tool call not already statically gated.
+   This is a runtime-only option — closures cannot be safely embedded in module
+   attributes at compile time.
+
+Both tiers feed into `ApprovalGate.requires_approval?/3`. A tool call is gated
+if either tier returns true. See [HITL Strategy Integration](../hitl/strategy-integration.md)
+for the full approval flow.
 
 ### Generated Functions
 

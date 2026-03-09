@@ -8,33 +8,32 @@ invocations, tool execution, and result accumulation.
 
 The strategy stores its state under `agent.state.__strategy__`:
 
-| Field                   | Type                        | Purpose                                                                                                                                                                                    |
-| ----------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `status`                | atom                        | `:idle`, `:awaiting_llm`, `:awaiting_tools`, `:awaiting_suspension`, `:awaiting_tools_and_suspension`, `:completed`, `:error`                                                              |
-| `phase`                 | atom                        | [Phase tracking](../hitl/persistence.md#handling-in-flight-operations) for resume replay (`:idle`, `:awaiting_llm`, `:dispatching_tools`). Tracked within `Children.t()` for child phases. |
-| `nodes`                 | `%{String.t() => Node.t()}` | Available nodes indexed by name                                                                                                                                                            |
-| `model`                 | `String.t()`                | req_llm model spec (e.g. `"anthropic:claude-sonnet-4-20250514"`)                                                                                                                           |
-| `system_prompt`         | `String.t()`                | System instructions for the LLM                                                                                                                                                            |
-| `temperature`           | `float \| nil`              | Sampling temperature                                                                                                                                                                       |
-| `max_tokens`            | `integer \| nil`            | Maximum tokens in response                                                                                                                                                                 |
-| `stream`                | boolean                     | Whether to use streaming generation (default: `false`)                                                                                                                                     |
-| `termination_tool_name` | `String.t() \| nil`         | Name of the [termination tool](#termination-tool) (derived from module)                                                                                                                    |
-| `termination_tool_mod`  | module \| nil               | Action module for the [termination tool](#termination-tool)                                                                                                                                |
-| `llm_opts`              | keyword                     | Additional options passed through to req_llm                                                                                                                                               |
-| `conversation`          | `ReqLLM.Context.t()`        | Conversation history managed by req_llm                                                                                                                                                    |
-| `tools`                 | `[ReqLLM.Tool.t()]`         | Tool descriptions as `ReqLLM.Tool` structs derived from nodes                                                                                                                              |
-| `tool_concurrency`      | `ToolConcurrency.t()`       | Tracks pending, completed, and queued tool calls with concurrency limits (see [Tool Concurrency](#tool-concurrency))                                                                       |
-| `suspended_calls`       | `%{id => suspended_call}`   | Tool calls [suspended](../hitl/strategy-integration.md) for non-HITL reasons (rate limit, async)                                                                                           |
-| `context`               | `Context.t()`               | Accumulated [context](../nodes/context-flow.md#context-layers) with ambient, working, and fork layers                                                                                      |
-| `ambient_keys`          | `[atom()]`                  | Keys extracted from start params into the [ambient layer](../nodes/context-flow.md#ambient)                                                                                                |
-| `iteration`             | integer                     | Current loop iteration                                                                                                                                                                     |
-| `max_iterations`        | integer                     | Safety limit                                                                                                                                                                               |
-| `req_options`           | keyword                     | Opaque HTTP options forwarded to [LLMAction](llm-integration.md)                                                                                                                           |
-| `approval_gate`         | `ApprovalGate.t()`          | Encapsulates gated node names, [approval policy](../hitl/strategy-integration.md#orchestrator-approval-gate), rejection policy, and pending gated calls                                    |
-| `pending_suspension`    | `nil \| Suspension.t()`     | Tracks any active [suspension](../hitl/README.md)                                                                                                                                          |
-| `children`              | `Children.t()`              | Serializable [child references](../hitl/persistence.md#childref-serializable-child-references) and lifecycle phases for checkpoint/thaw                                                    |
-| `hibernate_after`       | `pos_integer() \| nil`      | Delay (ms) before [checkpoint](../hitl/persistence.md) on suspension                                                                                                                       |
-| `result`                | any                         | Final answer when complete (may be [NodeIO](../nodes/typed-io.md))                                                                                                                         |
+| Field                   | Type                        | Purpose                                                                                                                                                                             |
+| ----------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`                | atom                        | `:idle`, `:awaiting_llm`, `:awaiting_tools`, `:awaiting_approval`, `:awaiting_suspension`, `:awaiting_tools_and_approval`, `:awaiting_tools_and_suspension`, `:completed`, `:error` |
+| `nodes`                 | `%{String.t() => Node.t()}` | Available nodes indexed by name                                                                                                                                                     |
+| `model`                 | `String.t()`                | req_llm model spec (e.g. `"anthropic:claude-sonnet-4-20250514"`)                                                                                                                    |
+| `system_prompt`         | `String.t()`                | System instructions for the LLM                                                                                                                                                     |
+| `temperature`           | `float \| nil`              | Sampling temperature                                                                                                                                                                |
+| `max_tokens`            | `integer \| nil`            | Maximum tokens in response                                                                                                                                                          |
+| `stream`                | boolean                     | Whether to use streaming generation (default: `false`)                                                                                                                              |
+| `termination_tool_name` | `String.t() \| nil`         | Name of the [termination tool](#termination-tool) (derived from module)                                                                                                             |
+| `termination_tool_mod`  | module \| nil               | Action module for the [termination tool](#termination-tool)                                                                                                                         |
+| `llm_opts`              | keyword                     | Additional options passed through to req_llm                                                                                                                                        |
+| `conversation`          | `ReqLLM.Context.t()`        | Conversation history managed by req_llm                                                                                                                                             |
+| `tools`                 | `[ReqLLM.Tool.t()]`         | Tool descriptions as `ReqLLM.Tool` structs derived from nodes                                                                                                                       |
+| `tool_concurrency`      | `ToolConcurrency.t()`       | Tracks pending, completed, and queued tool calls with concurrency limits (see [Tool Concurrency](#tool-concurrency))                                                                |
+| `suspended_calls`       | `%{id => suspended_call}`   | Tool calls [suspended](../hitl/strategy-integration.md) for non-HITL reasons (rate limit, async)                                                                                    |
+| `context`               | `Context.t()`               | Accumulated [context](../nodes/context-flow.md#context-layers) with ambient, working, and fork layers                                                                               |
+| `ambient_keys`          | `[atom()]`                  | Keys extracted from start params into the [ambient layer](../nodes/context-flow.md#ambient)                                                                                         |
+| `iteration`             | integer                     | Current loop iteration                                                                                                                                                              |
+| `max_iterations`        | integer                     | Safety limit                                                                                                                                                                        |
+| `req_options`           | keyword                     | Opaque HTTP options forwarded to [LLMAction](llm-integration.md)                                                                                                                    |
+| `approval_gate`         | `ApprovalGate.t()`          | Encapsulates gated node names, [approval policy](../hitl/strategy-integration.md#orchestrator-approval-gate), rejection policy, and pending gated calls                             |
+| `pending_suspension`    | `nil \| Suspension.t()`     | Tracks any active [suspension](../hitl/README.md)                                                                                                                                   |
+| `children`              | `Children.t()`              | Serializable [child references](../hitl/persistence.md#childref-serializable-child-references) and lifecycle phases for checkpoint/thaw                                             |
+| `hibernate_after`       | `pos_integer() \| nil`      | Delay (ms) before [checkpoint](../hitl/persistence.md) on suspension                                                                                                                |
+| `result`                | any                         | Final answer when complete (may be [NodeIO](../nodes/typed-io.md))                                                                                                                  |
 
 ## Status Lifecycle
 
@@ -46,10 +45,14 @@ stateDiagram-v2
     awaiting_llm --> completed : final_answer returned
     awaiting_llm --> error : LLM error or max iterations
     awaiting_tools --> awaiting_llm : all tool results collected
+    awaiting_tools --> awaiting_approval : running tools finish, gated remain
+    awaiting_tools --> awaiting_tools_and_approval : tool gated while others run
     awaiting_tools --> awaiting_suspension : running tools finish, suspended remain
     awaiting_tools --> awaiting_tools_and_suspension : tool suspends while others run
     awaiting_tools --> error : tool execution error
+    awaiting_tools_and_approval --> awaiting_approval : running tools finish
     awaiting_tools_and_suspension --> awaiting_suspension : running tools finish
+    awaiting_approval --> awaiting_llm : all approvals resolved
     awaiting_suspension --> awaiting_llm : all suspensions resumed
     completed --> [*]
     error --> [*]
@@ -75,7 +78,7 @@ stateDiagram-v2
 | `:orchestrator_llm_result`    | RunInstruction result (LLM call)    | Process LLM response: dispatch tools or finalize                                                     |
 | `:orchestrator_tool_result`   | RunInstruction result (action node) | Collect tool result, check if all complete                                                           |
 | `:orchestrator_child_result`  | Child agent signal (agent node)     | Same as tool_result for AgentNode                                                                    |
-| `:orchestrator_child_started` | SpawnAgent confirmation             | Send context to child                                                                                |
+| `:orchestrator_child_started` | SpawnAgent confirmation             | Register child lifecycle metadata (`Children.register_started/3`)                                    |
 | `:orchestrator_child_exit`    | Child process terminated            | Handle unexpected exit                                                                               |
 | `:suspend_resume`             | Resume signal for suspended tool    | Resume tool from `suspended_calls` — use provided data or re-dispatch                                |
 | `:suspend_timeout`            | Suspension timeout fires            | Convert to error tool result, clear `suspended_calls` entry, check completion                        |
@@ -83,96 +86,31 @@ stateDiagram-v2
 
 ## Execution Flow
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant AgentServer
-    participant Strategy
-    participant Runtime
-
-    Client->>AgentServer: signal("composer.orchestrator.query", {query, context})
-    AgentServer->>Strategy: cmd(:orchestrator_start)
-
-    loop ReAct Loop
-        Strategy->>Strategy: Collect tool_results from previous round
-        Strategy-->>AgentServer: RunInstruction(llm_generate_action)
-        Note over AgentServer,Runtime: generate(conversation, tool_results, tools, opts)
-        AgentServer->>Runtime: execute LLM call
-        Runtime-->>AgentServer: {response, updated_conversation}
-        AgentServer->>Strategy: cmd(:orchestrator_llm_result)
-
-        alt tool_calls
-            loop For each tool call
-                alt ActionNode
-                    Strategy-->>AgentServer: RunInstruction(action)
-                    Runtime-->>AgentServer: result
-                    AgentServer->>Strategy: cmd(:orchestrator_tool_result)
-                else AgentNode
-                    Strategy-->>AgentServer: SpawnAgent
-                    Note over AgentServer,Runtime: child lifecycle...
-                    AgentServer->>Strategy: cmd(:orchestrator_child_result)
-                end
-            end
-            Strategy->>Strategy: Collect tool_results for next generate call
-        else final_answer
-            Strategy->>Strategy: Set status = completed, store result
-            Strategy-->>AgentServer: [] (done)
-        else error
-            Strategy->>Strategy: Set status = error
-            Strategy-->>AgentServer: [Error directive]
-        end
-    end
-```
+1. `composer.orchestrator.query` triggers `:orchestrator_start`, which seeds context/conversation and emits an LLM `RunInstruction`.
+2. `:orchestrator_llm_result` either finalizes (`:completed`), errors, or dispatches tool calls.
+3. Action tools execute as `RunInstruction`; agent tools execute as `SpawnAgent`; both normalize to `%{id, name, result}`.
+4. Once `ToolConcurrency + ApprovalGate + suspended_calls` resolves to ready, the strategy emits the next LLM turn.
 
 ## LLM Execution via Directives
 
-The strategy never calls ReqLLM directly. Instead, it builds a
-`Jido.Instruction` targeting `LLMAction` and emits a RunInstruction directive.
-The instruction params contain all LLM-related state as flat keys:
-`conversation`, `tool_results`, `tools`, `model`, `query`, `system_prompt`,
-`temperature`, `max_tokens`, `stream`, `llm_opts`, and `req_options`.
-
-LLMAction calls the appropriate ReqLLM function based on `stream` and
-returns `{response, updated_conversation}` as an instruction result. The result
-is routed back to `cmd/3` as `:orchestrator_llm_result`. This keeps the strategy
-pure and testable. The strategy stores the updated `ReqLLM.Context` in its state
-for the next LLM call. It never inspects the conversation's internal structure
--- req_llm owns the message format. See
-[LLM Integration — Conversation State](llm-integration.md#conversation-state).
-
-The `req_options` from strategy state are included in the instruction params.
-LLMAction maps them to req_llm's `req_http_options` key, enabling
-[cassette-based testing](../testing.md) by injecting a plug that intercepts
-HTTP calls. The strategy treats `req_options` as opaque -- it passes them
-through without inspection. See
-[LLM Integration — Req Options](llm-integration.md#req-options).
+The strategy calls LLMs indirectly by emitting `RunInstruction(LLMAction)`.
+Instruction params are flat strategy fields (`conversation`, `tool_results`,
+`tools`, `model`, `query`, `system_prompt`, `temperature`, `max_tokens`,
+`stream`, `llm_opts`, `req_options`). LLMAction returns
+`{response, updated_conversation}` to `:orchestrator_llm_result`; strategy
+state stores the updated `ReqLLM.Context` for the next turn. `req_options`
+passes through opaquely and is mapped by LLMAction to `req_http_options`.
 
 ## Tool Execution
 
-When the LLM returns tool calls, the strategy dispatches each call
-polymorphically via `node.__struct__.to_directive(node, flat_context, opts)`.
-The node produces the appropriate directive type:
+Tool calls are dispatched polymorphically through `to_directive/3`:
 
-- **ActionNode** — `to_directive/3` produces a RunInstruction with the action
-  module and tool call arguments merged into the context. Results flow back as
-  `:orchestrator_tool_result`.
+- ActionNode -> `RunInstruction` -> `:orchestrator_tool_result`
+- AgentNode -> `SpawnAgent` -> `:orchestrator_child_result`
 
-- **AgentNode** — `to_directive/3` produces a SpawnAgent directive with the
-  tool call arguments merged into a forked child context. The child agent
-  lifecycle follows the same pattern as in
-  [Workflow AgentNode execution](../workflow/strategy.md#execution-flow-agentnode).
-  Results flow back as `:orchestrator_child_result`.
-
-Tool metadata (`call_id`, `tool_name`) is passed via the `:meta` and `:tag`
-opts, keeping the node implementation strategy-agnostic.
-
-`AgentTool.to_tool/1` delegates to each node's `to_tool_spec/1` callback to
-build `ReqLLM.Tool` structs for the LLM.
-
-In both cases, results are collected as normalized `tool_result` structs
-(`%{id, name, result}`) and passed to the next LLMAction call via
-`emit_llm_call/1`. LLMAction converts them to provider-specific message
-formats internally via `ReqLLM.Context.tool_result/3`.
+Metadata (`call_id`, `tool_name`) is threaded through directive opts (`:meta`,
+`:tag`). Results are normalized as `%{id, name, result}` and fed back into the
+next LLM turn.
 
 ## Iteration Safety
 
@@ -182,15 +120,10 @@ repeatedly calls tools without converging.
 
 ## Context Accumulation
 
-Unlike the Workflow where context flows linearly through the machine, the
-Orchestrator accumulates context across all tool executions within the ReAct
-loop. Each tool result is **scoped under the tool name** (derived from the
-node's name) and deep-merged into the strategy's `context` field. This
-prevents data loss when multiple tools produce similarly-shaped results.
-
-When the LLM calls the same tool multiple times, the second call's result
-overwrites the first under the same scope key. The tool implementation can
-read its previous output from `context[tool_name]` and append if needed.
+Unlike Workflow's linear context flow, the Orchestrator accumulates results
+across turns. Each result is scoped under the tool name and deep-merged into
+`context`. Repeated calls to the same tool overwrite that tool scope unless the
+tool itself appends to prior state.
 
 ### Context Layers
 
@@ -207,32 +140,14 @@ three layers:
 - **Fork functions** — MFA tuples applied at SpawnAgent boundaries when the
   orchestrator spawns AgentNode tools as children.
 
-#### Initialization
+`init/2` builds `Context.new(fork_fns: fork_fns)` and stores `ambient_keys`.
+On `:orchestrator_start`, ambient keys are split from input params and merged
+with inherited `__ambient__` when present. For tools:
 
-During `init/2`, the strategy reads `ambient:` and `fork_fns:` from the DSL
-options and builds a `Context.new(fork_fns: fork_fns)`. During
-`:orchestrator_start`, ambient keys are split from the start params and placed
-in the ambient layer. If the start params contain an `__ambient__` key (because
-this orchestrator is a child of another composition), those inherited ambient
-values are merged in as well.
+- ActionNode calls use flattened context (`Context.to_flat_map/1`)
+- AgentNode calls fork context via `Context.fork_for_child/1` before SpawnAgent
 
-#### Tool Directive Construction
-
-When building directives for tool calls, the strategy uses the context layers:
-
-- **ActionNode tools** — The strategy merges tool call arguments into the
-  working layer, then passes `Context.to_flat_map/1` as the instruction params.
-  The action receives the full accumulated context including ambient data
-  under `Context.ambient_key()`.
-- **AgentNode tools** — The strategy calls `Context.fork_for_child/1` to run
-  fork functions (e.g., OTel span creation), then serializes the forked
-  context into the SpawnAgent directive's opts.
-
-#### LLM Visibility
-
-The LLM does not see raw ambient context in conversation messages — it sees the
-system prompt (which may incorporate ambient data) and tool results (which come
-from the working layer).
+LLM messages consume system prompt + tool results, not raw ambient layer state.
 
 ## Tool Concurrency
 
@@ -250,12 +165,11 @@ is handled by `Jido.Composer.Orchestrator.StatusComputer.compute/3`.
 ## Tool Suspension
 
 A tool may suspend for non-HITL reasons (rate limits, async external jobs,
-resource throttling). The strategy detects suspension through two paths:
+resource throttling). Detection paths:
 
-| Detection Path | Condition                                                     | Source                      |
-| -------------- | ------------------------------------------------------------- | --------------------------- |
-| Direct status  | `params[:status] == :suspend`                                 | Strategy-level tests        |
-| Effects-based  | `params[:status] == :ok` and `:suspend` in `params[:effects]` | Runtime DirectiveExec paths |
+- Direct status: `params[:status] == :suspend` (strategy-level test path).
+- Effects-based: `params[:status] == :ok` plus `:suspend` in `params[:effects]`
+  (runtime `DirectiveExec` path).
 
 Both paths route to `handle_tool_suspension`, which:
 

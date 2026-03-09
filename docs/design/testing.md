@@ -1,28 +1,23 @@
 # Testing Strategy
 
-Jido Composer follows a test-driven development approach. Tests are written
-before implementation across three layers: unit tests, integration tests, and
-end-to-end tests. HTTP interactions are captured as cassettes via
-[ReqCassette](https://hexdocs.pm/req_cassette) and preferred over mocks
-wherever possible — cassettes provide complete, real data structures that catch
-issues hand-written mocks miss.
+Jido Composer uses TDD across unit, integration, and end-to-end layers.
+LLM-facing paths are validated with recorded HTTP traffic via
+[ReqCassette](https://hexdocs.pm/req_cassette), while deterministic strategy
+loops are often driven with `LLMStub`.
 
 ## Cassettes Over Mocks
 
-The guiding principle: **use cassettes as the primary test data source**. Mocks
-are a last resort for cases where no HTTP interaction exists (pure FSM logic,
-compile-time validation).
+Guiding principle: use cassettes for network/protocol realism, and use stubs
+for deterministic strategy-loop control.
 
-| Approach      | When to Use                                                                                                                             |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **Cassette**  | Any test that involves LLM responses, tool call formats, or HTTP-dependent behaviour. Preferred even for unit tests of response parsing |
-| **LLMStub**   | Strategy logic tests (direct mode) and DSL integration tests (plug mode). See [LLMStub Patterns](#llmstub-patterns)                     |
-| **No double** | Pure data structures (Machine transitions, context deep merge, AgentTool conversion)                                                    |
+| Approach      | When to Use                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| **Cassette**  | HTTP/Req/req_llm boundaries, provider response shape, replayable E2E and integration paths |
+| **LLMStub**   | Deterministic strategy tests and directive-loop tests (direct or Req.Test plug mode)       |
+| **No double** | Pure data structures (Machine transitions, context merge, AgentTool conversion)            |
 
-Cassettes capture the full response structure — headers, status codes, body
-format, edge cases — that mocks typically simplify away. When an LLM provider
-changes their response format, cassette-based tests surface the breakage
-immediately.
+Cassettes preserve full response shape (headers/status/body), which catches
+provider format drift earlier than hand-written fixtures.
 
 ## Test Layers
 
@@ -47,33 +42,31 @@ graph TB
     style E2E fill:#e3f2fd,stroke:#2196f3
 ```
 
-| Layer           | Scope                                | LLM Data Source   | Speed |
-| --------------- | ------------------------------------ | ----------------- | ----- |
-| **Unit**        | Single module in isolation           | Cassettes or none | Fast  |
-| **Integration** | Multi-module composition             | Cassettes         | Fast  |
-| **End-to-end**  | Full stack orchestration             | Cassettes         | Fast  |
-| **Recording**   | Capture new cassettes from real APIs | Real network      | Slow  |
+| Layer           | Scope                                | LLM Data Source         | Speed |
+| --------------- | ------------------------------------ | ----------------------- | ----- |
+| **Unit**        | Single module in isolation           | None or LLMStub         | Fast  |
+| **Integration** | Multi-module composition             | LLMStub and/or cassette | Fast  |
+| **End-to-end**  | Full stack orchestration             | Cassette                | Fast  |
+| **Recording**   | Capture new cassettes from real APIs | Real network            | Slow  |
 
 ### Unit Tests
 
-Each module has a corresponding test file. Where the module processes LLM
-responses, the test uses a cassette to provide real response data:
+Representative unit coverage:
 
-| Module                  | Test Focus                                                          | Data Source |
-| ----------------------- | ------------------------------------------------------------------- | ----------- |
-| `Machine`               | Transition lookup, wildcard fallbacks, terminal detection           | None (pure) |
-| `ActionNode`            | Context accumulation via deep merge                                 | None (pure) |
-| `AgentNode`             | Struct construction, mode validation                                | None (pure) |
-| `AgentTool`             | Node-to-ReqLLM.Tool conversion, argument mapping, result formatting | None (pure) |
-| `LLMAction`             | Response parsing, tool call extraction, error handling              | Cassette    |
-| `Orchestrator.Strategy` | Directive emission for LLM results, tool dispatch                   | LLMStub     |
-| `Workflow.Strategy`     | FSM execution, directive emission                                   | None (pure) |
-| `Error`                 | Error class construction, message formatting                        | None (pure) |
+| Module                  | Test Focus                                                           | Data Source |
+| ----------------------- | -------------------------------------------------------------------- | ----------- |
+| `Machine`               | Transition lookup, wildcard fallbacks, terminal detection            | None (pure) |
+| `ActionNode`            | Context accumulation via deep merge                                  | None (pure) |
+| `AgentNode`             | Struct construction, mode validation                                 | None (pure) |
+| `AgentTool`             | Node-to-ReqLLM.Tool conversion, argument mapping, result formatting  | None (pure) |
+| `Orchestrator.Strategy` | Directive emission for LLM/tool results, concurrency, gating, replay | LLMStub     |
+| `Workflow.Strategy`     | FSM execution, directive emission                                    | None (pure) |
+| `Error`                 | Error class construction, message formatting                         | None (pure) |
 
 ### Integration Tests
 
-Integration tests verify multi-module composition with cassette-driven LLM
-responses:
+Integration tests verify multi-module composition with both deterministic stubs
+and recorded LLM responses, depending on scenario.
 
 | Scenario                       | Components Under Test                             |
 | ------------------------------ | ------------------------------------------------- |
@@ -221,51 +214,13 @@ Jido.Composer.TestSupport.LLMStub (`test/support/llm_stub.ex`) provides
 predetermined LLM responses for tests that do not need real HTTP interactions.
 It operates in two modes:
 
-### Direct Mode (strategy tests)
+| Mode        | Entry Point                     | Typical Use                                                       |
+| ----------- | ------------------------------- | ----------------------------------------------------------------- |
+| Direct mode | `LLMStub.setup/1` + `execute/1` | Strategy tests that manually drive `RunInstruction`/`cmd` loops   |
+| Plug mode   | `LLMStub.setup_req_stub/2`      | DSL `query_sync` and integration tests that still run through Req |
 
-For tests that manually drive the directive loop, `LLMStub.execute/1` pops
-responses from a process-dictionary queue. The test intercepts the
-RunInstruction directive targeting LLMAction and calls `LLMStub.execute/1`
-with the instruction's params instead of executing the action.
-
-```
-LLMStub.setup([
-  {:tool_calls, [%{id: "call_1", name: "my_tool", arguments: %{}}]},
-  {:final_answer, "Done."}
-])
-
-# Drive the directive loop manually:
-# 1. query(agent, "do something") -> [RunInstruction(LLMAction)]
-# 2. LLMStub.execute(instruction.params) -> {:ok, %{response: ..., conversation: ...}}
-# 3. cmd(agent, {:orchestrator_llm_result, result}) -> [RunInstruction(tool)]
-# ...
-```
-
-Responses can be:
-
-- `{:tool_calls, [call_structs]}` -- simulate the LLM choosing tools
-- `{:final_answer, "text"}` -- simulate completion
-- `{:error, reason}` -- simulate failures
-
-### Plug Mode (DSL/integration tests)
-
-For tests that use `query_sync` where LLMAction runs through the full
-Req/ReqLLM stack, `LLMStub.setup_req_stub/2` registers a `Req.Test` stub that
-serves Anthropic-format JSON responses:
-
-```
-plug = LLMStub.setup_req_stub(:my_test, [
-  {:tool_calls, [%{id: "call_1", name: "my_tool", arguments: %{}}]},
-  {:final_answer, "Done."}
-])
-
-# The orchestrator is configured with req_options: [plug: plug]
-# LLMAction's Req calls are intercepted by the stub
-```
-
-The stub generates proper Anthropic API response JSON including message IDs,
-usage data, and content blocks. Responses are stored in an Agent process so
-they survive across process boundaries.
+Supported stub responses: `{:tool_calls, calls}`, `{:final_answer, text}`, and
+`{:error, reason}`.
 
 ## Directory Structure
 
@@ -291,7 +246,7 @@ test/
 │   │   └── dsl_test.exs            # Unit: Workflow DSL
 │   └── orchestrator/
 │       ├── agent_tool_test.exs     # Unit: AgentTool adapter
-│       ├── strategy_test.exs       # Unit: Orchestrator Strategy (cassette)
+│       ├── strategy_test.exs       # Unit: Orchestrator Strategy (LLMStub-driven)
 │       └── dsl_test.exs            # Unit: Orchestrator DSL
 ├── integration/
 │   ├── workflow_test.exs           # Integration: workflow compositions

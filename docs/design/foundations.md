@@ -114,30 +114,10 @@ type — it encapsulates concurrent execution behind the standard Node interface
 In the [Orchestrator](orchestrator/README.md), the LLM can invoke multiple
 tools simultaneously.
 
-### Split (first / `***`)
-
-```
-split(f, g)({a, b}) = {f(a), g(b)}
-```
-
-Route different subsets of context to different nodes. This maps directly to
-the [scoped accumulation model](nodes/context-flow.md#output-scoping): each
-node's output is stored under its own key (`:extract`, `:transform`, etc.),
-providing natural key-level isolation.
-
-### Choice (case / `|||`)
-
-```
-choice(f, g)(Left(a)) = f(a)
-choice(f, g)(Right(b)) = g(b)
-```
-
-This is exactly the **conditional transition** in the FSM: based on outcome,
-route to one node or another.
-
-These combinators are not separate abstractions — they are all expressible
-through the FSM transition table and the [Node](nodes/README.md) interface. The
-FSM is the concrete syntax; the arrow combinators are the denotational semantics.
+`split (*** )` and `choice (|||)` appear concretely as scoped per-node outputs
+and outcome-driven FSM transitions. They are not separate runtime primitives;
+the [Node](nodes/README.md) interface + transition table provide the concrete
+syntax.
 
 ## The Orchestrator as Free Category
 
@@ -171,9 +151,8 @@ graph TB
     style FSM fill:#fff5f5,stroke:#666
 ```
 
-This is why the Orchestrator is strictly more powerful but less predictable than
-the Workflow. The Workflow is a single chosen path through the free category;
-the Orchestrator explores the space dynamically.
+The Workflow is one compile-time path in this space; the Orchestrator explores
+paths at runtime, trading predictability for expressiveness.
 
 ## Coalgebraic Streaming
 
@@ -184,10 +163,8 @@ A streaming agent is a **coalgebra**: `Context -> (Context, Event) Stream`. It
 unfolds a sequence of state transitions, emitting an event at each step. The
 parent observes this stream and can react to intermediate values.
 
-In categorical terms, this is an **F-coalgebra** where
-`F(X) = Context x Event x (X + 1)` (the `+ 1` represents termination). The
-agent's FSM drives the unfolding, and specific states are designated as
-"observation points" that emit events upstream.
+In categorical terms this is an **F-coalgebra**
+`F(X) = Context x Event x (X + 1)`, where FSM states define observation points.
 
 ## Nesting as Functorial Embedding
 
@@ -198,12 +175,11 @@ identity) is mapped to a single morphism in the outer category. The functor
 preserves composition and identity — the inner workflow's sequential pipeline
 appears as an atomic operation to the parent.
 
-All node types — including [AgentNode](nodes/README.md#agentnode) — satisfy the
-morphism contract via `run/3`. An AgentNode in sync mode delegates to the
-child's `run_sync` or `query_sync` function, producing a valid
-`{:ok, context}` result. This ensures the monoid closes: `f >>> g` works for
-all node type combinations, and [FanOutNode](nodes/README.md#fanoutnode)
-branches can contain AgentNodes.
+All node types — including [AgentNode](nodes/README.md#agentnode) — expose the
+same `run/3` interface. In sync mode, AgentNode delegates to child
+`run_sync/2` or `query_sync/3`; async/streaming modes use directive execution.
+This keeps composition closed at the strategy layer, including FanOut branches
+that contain AgentNodes.
 
 ## Environment Propagation as Reader Monad
 
@@ -247,7 +223,7 @@ closes even when composing nodes with heterogeneous output types.
 
 | Concept              | Category Theory                 | jido_composer Representation                                                         |
 | -------------------- | ------------------------------- | ------------------------------------------------------------------------------------ |
-| Node                 | Morphism `A -> A`               | `Node.run(ctx) :: {:ok, ctx}` — all node types satisfy this                          |
+| Node                 | Morphism `A -> A`               | `run/3` returns `{:ok, ctx}` / `{:ok, ctx, outcome}` / `{:error, reason}`            |
 | Sequential pipe      | Composition `f >>> g`           | FSM transitions: `state_a -> state_b -> state_c`                                     |
 | Context accumulation | Monoidal operation              | Scoped `deep_merge` — each node writes under its own key                             |
 | Error handling       | Kleisli category (Result monad) | `{:error, reason}` short-circuits; `{:_, :error} => :failed`                         |
@@ -268,13 +244,13 @@ closes even when composing nodes with heterogeneous output types.
 These are not just theoretical — they should be verified in property-based
 tests:
 
-| Law                       | Statement                                       | Test Strategy                                                           |
-| ------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------- |
-| **Identity**              | `id >>> f = f = f >>> id`                       | A pass-through node before or after any node does not change the result |
-| **Associativity**         | `(f >>> g) >>> h = f >>> (g >>> h)`             | Grouping does not matter for sequential composition                     |
-| **Left zero**             | `error >>> f = error`                           | An error node followed by anything still produces the error             |
-| **Merge associativity**   | `merge(merge(a, b), c) = merge(a, merge(b, c))` | Context accumulation is associative                                     |
-| **Merge identity**        | `merge(%{}, a) = a`                             | Empty context is identity                                               |
-| **Outcome preservation**  | Composing nodes preserves outcome semantics     | `:ok` from node A feeds into node B; `:error` short-circuits            |
-| **Functor embedding**     | Inner agent as single outer morphism            | AgentNode.run/3 produces `{:ok, ctx}` for any agent type                |
-| **Environment read-only** | Reader environment is never modified by nodes   | Ambient context unchanged by child execution                            |
+| Law                       | Statement                                       | Test Strategy                                                                      |
+| ------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
+| **Identity**              | `id >>> f = f = f >>> id`                       | A pass-through node before or after any node does not change the result            |
+| **Associativity**         | `(f >>> g) >>> h = f >>> (g >>> h)`             | Grouping does not matter for sequential composition                                |
+| **Left zero**             | `error >>> f = error`                           | An error node followed by anything still produces the error                        |
+| **Merge associativity**   | `merge(merge(a, b), c) = merge(a, merge(b, c))` | Context accumulation is associative                                                |
+| **Merge identity**        | `merge(%{}, a) = a`                             | Empty context is identity                                                          |
+| **Outcome preservation**  | Composing nodes preserves outcome semantics     | `:ok` from node A feeds into node B; `:error` short-circuits                       |
+| **Functor embedding**     | Inner agent as single outer morphism            | Sync AgentNode composes as a node morphism; async/streaming compose via directives |
+| **Environment read-only** | Reader environment is never modified by nodes   | Ambient context unchanged by child execution                                       |

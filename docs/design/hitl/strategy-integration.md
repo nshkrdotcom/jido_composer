@@ -15,11 +15,10 @@ strategies when a flow suspends for any reason:
 | `notification` | config \| nil     | How to deliver the notification (PubSub, webhook, etc.)     |
 | `hibernate`    | boolean \| config | Whether to hibernate the agent after suspending             |
 
-The runtime interprets this directive to:
-
-1. Deliver the notification through the configured channel
-2. Optionally start a timeout timer via a Schedule directive
-3. Optionally hibernate the agent (see [Persistence](persistence.md))
+This directive carries suspension metadata for timeout/resume orchestration and
+optional hibernate intent (`hibernate`). Durable long-pause handling is
+performed via [CheckpointAndStop](persistence.md#checkpointandstop-directive).
+Notification delivery is host-runtime specific.
 
 ### SuspendForHuman (Convenience Wrapper)
 
@@ -110,24 +109,13 @@ function.
 
 #### Configuration
 
-Per-tool metadata in the DSL:
+| Source                  | Mechanism                                                        |
+| ----------------------- | ---------------------------------------------------------------- |
+| Static DSL metadata     | `nodes: [{ToolModule, requires_approval: true}, ...]`            |
+| Runtime strategy option | Optional `approval_policy` function (set in strategy opts/state) |
 
-```
-nodes: [
-  {DeployAction, requires_approval: true},
-  {DeleteAction, requires_approval: true},
-  QueryAction  # no approval needed
-]
-```
-
-Dynamic policy function (optional, evaluated after static metadata):
-
-```
-approval_policy: {MyApp.Policies, :orchestrator_approval, []}
-```
-
-The policy function receives `(tool_call, context)` and returns `:proceed` or
-`{:require_approval, opts}`.
+The optional policy function receives `(tool_call, context)` and returns
+`:proceed` or `{:require_approval, opts}`.
 
 #### Tool Call Partitioning
 
@@ -231,17 +219,13 @@ completed result is stored, the rate-limited branch auto-resumes after backoff,
 and the human-approval branch waits for input. The merge happens only when all
 three have results.
 
-### DSL Options
+### Configuration Surface
 
-Both Workflow and Orchestrator DSL macros accept suspension configuration:
+Suspension behavior is configured across node definitions and strategy options:
 
-| Option                    | Type                           | Default              | Purpose                                                                                  |
-| ------------------------- | ------------------------------ | -------------------- | ---------------------------------------------------------------------------------------- |
-| `notification`            | config                         | nil                  | How to deliver suspension notifications (PubSub, webhook, etc.)                          |
-| `hibernate`               | boolean \| config              | false                | Whether to checkpoint during long pauses                                                 |
-| `hibernate_after`         | `pos_integer()`                | `300_000` (5 min)    | Delay before auto-hibernate                                                              |
-| `default_timeout`         | `pos_integer()` \| `:infinity` | `:infinity`          | Default timeout for HumanNodes and other suspending nodes                                |
-| `default_timeout_outcome` | `atom()`                       | `:timeout`           | Default timeout outcome                                                                  |
-| `rejection_policy`        | atom                           | `:continue_siblings` | Orchestrator only: how to handle sibling tool calls on rejection                         |
-| `ambient`                 | `[atom()]`                     | `[]`                 | Context keys extracted into the [ambient layer](../nodes/context-flow.md#context-layers) |
-| `fork_fns`                | keyword of MFA tuples          | `[]`                 | [Fork functions](../nodes/context-flow.md#fork-functions) applied at agent boundaries    |
+| Scope                  | Option/Field                 | Notes                                      |
+| ---------------------- | ---------------------------- | ------------------------------------------ |
+| HumanNode              | `timeout`, `timeout_outcome` | Per-node suspension behavior               |
+| Strategy state/options | `hibernate_after`            | Enables auto-append of `CheckpointAndStop` |
+| Orchestrator strategy  | `rejection_policy`           | Sibling behavior on gated-call rejection   |
+| Both DSLs              | `ambient`, `fork_fns`        | Context-layer and boundary behavior        |
