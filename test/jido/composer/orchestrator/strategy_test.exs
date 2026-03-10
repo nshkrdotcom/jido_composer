@@ -1421,6 +1421,19 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
       assert state.status == :completed
       assert %NodeIO{type: :text, value: "The result is 8.0"} = state.result
     end
+
+    test "termination tool in nodes does not duplicate in tools list" do
+      agent =
+        init_agent(nodes: [AddAction, FinalReportAction], termination_tool: FinalReportAction)
+
+      state = get_state(agent)
+
+      matching = Enum.filter(state.tools, fn t -> t.name == "final_report" end)
+      assert length(matching) == 1
+
+      assert state.termination_tool_name == "final_report"
+      assert state.termination_tool_mod == FinalReportAction
+    end
   end
 
   # Simulates what the runtime does when executing a RunInstruction for LLM

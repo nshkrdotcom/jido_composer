@@ -1356,7 +1356,15 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     name = mod.name()
     # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
     updated_atoms = Map.put(name_atoms, name, String.to_atom(name))
-    {tools ++ [tool], updated_atoms, name, mod}
+
+    tools =
+      if Enum.any?(tools, fn t -> t.name == tool.name end) do
+        tools
+      else
+        tools ++ [tool]
+      end
+
+    {tools, updated_atoms, name, mod}
   end
 
   defp find_termination_call(_calls, nil), do: :not_terminated
