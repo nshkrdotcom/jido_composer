@@ -1,0 +1,553 @@
+# Jido AI Bridge: Real AI Agents in Composer Workflows
+
+```elixir
+Mix.install(
+  [
+    {:jido_composer, path: Path.join(__DIR__, "..")},
+    {:jido_ai, "~> 2.0.0-rc.0"},
+    {:kino, "~> 0.14"}
+  ],
+  config: [
+    jido_action: [default_timeout: :timer.minutes(5)],
+    jido_ai: [
+      model_aliases: %{
+        fast: "anthropic:claude-haiku-4-5-20251001"
+      }
+    ],
+    req_llm: [
+      anthropic_api_key: System.get_env("ANTHROPIC_API_KEY")
+    ]
+  ]
+)
+```
+
+## Introduction
+
+Jido Composer and Jido AI solve different problems:
+
+- **Composer** wires agents and actions into multi-step flows (FSM pipelines, parallel
+  branches, human gates)
+- **Jido AI** gives individual agents rich reasoning strategies (ReAct, Chain-of-Thought,
+  Tree-of-Thoughts, Adaptive, etc.)
+
+This guide demonstrates how they **compose together**: a Composer Workflow where each
+step uses a real `Jido.AI.Agent` backed by an LLM, orchestrated by the deterministic FSM.
+
+We'll build an **Article Analysis Pipeline**:
+
+1. **Summarize** — An AI agent summarizes the input text
+2. **Critique** — An AI agent critiques the summary from multiple angles
+3. **Score** — A deterministic action computes a weighted score
+4. **Verdict** — An AI agent produces the final accept/reject recommendation
+
+```mermaid
+stateDiagram-v2
+    [*] --> summarize
+    summarize --> critique : ok
+    critique --> score : ok
+    score --> verdict : ok
+    verdict --> done : ok
+    summarize --> failed : error
+    critique --> failed : error
+    score --> failed : error
+    verdict --> failed : error
+
+    note right of summarize
+        AI Agent (ReAct)
+        with summarize tool
+    end note
+
+    note right of critique
+        AI Agent (ReAct)
+        with critique tool
+    end note
+
+    note right of verdict
+        AI Agent (ReAct)
+        with verdict tool
+    end note
+```
+
+Each AI agent node uses `ask_sync/3` — the Jido AI agent interface — making it a
+first-class Composer node without any wrapper boilerplate.
+
+## Setup: Jido Supervision Tree
+
+Jido AI agents run as supervised processes via `Jido.AgentServer`. We start the
+full Jido supervision tree (Registry + DynamicSupervisor) so that Composer can
+spawn and stop agent processes during workflow execution.
+
+```elixir
+# Suppress verbose debug/notice logging from ReAct internals
+Logger.configure(level: :warning)
+
+{:ok, _} = Supervisor.start_link([{Jido, name: Jido}], strategy: :one_for_one)
+
+defmodule Demo.Helpers do
+  defmacro suppress_agent_doctests do
+    quote do
+      @doc false
+      def plugins, do: super()
+      @doc false
+      def capabilities, do: super()
+      @doc false
+      def signal_types, do: super()
+    end
+  end
+end
+
+IO.puts("Jido supervision tree started.")
+```
+
+## Tool Actions
+
+Each AI agent has a structured tool that produces well-typed output. The agent
+reasons about the query and calls the tool to produce its final answer. This
+gives us structured results even though the LLM is doing the reasoning.
+
+```elixir
+defmodule Demo.SummarizeAction do
+  use Jido.Action,
+    name: "produce_summary",
+    description: "Produce a concise summary of the analyzed text. Call this with your summary.",
+    schema: Zoi.object(%{
+      summary: Zoi.string(),
+      key_points: Zoi.string(),
+      word_count: Zoi.integer()
+    })
+
+  @impl true
+  def run(params, _ctx) do
+    {:ok, %{
+      summary: params.summary,
+      key_points: params.key_points,
+      word_count: params.word_count
+    }}
+  end
+end
+
+defmodule Demo.CritiqueAction do
+  use Jido.Action,
+    name: "produce_critique",
+    description: "Produce a structured critique with scores. Call this with your analysis.",
+    schema: Zoi.object(%{
+      strengths: Zoi.string(),
+      weaknesses: Zoi.string(),
+      clarity_score: Zoi.integer(),
+      depth_score: Zoi.integer(),
+      novelty_score: Zoi.integer()
+    })
+
+  @impl true
+  def run(params, _ctx) do
+    {:ok, %{
+      strengths: params.strengths,
+      weaknesses: params.weaknesses,
+      clarity_score: params.clarity_score,
+      depth_score: params.depth_score,
+      novelty_score: params.novelty_score
+    }}
+  end
+end
+
+defmodule Demo.VerdictAction do
+  use Jido.Action,
+    name: "produce_verdict",
+    description: "Produce the final verdict. Call this with your recommendation.",
+    schema: Zoi.object(%{
+      decision: Zoi.string(),
+      confidence: Zoi.string(),
+      reasoning: Zoi.string(),
+      recommendation: Zoi.string()
+    })
+
+  @impl true
+  def run(params, _ctx) do
+    {:ok, %{
+      decision: params.decision,
+      confidence: params.confidence,
+      reasoning: params.reasoning,
+      recommendation: params.recommendation
+    }}
+  end
+end
+
+IO.puts("Tool actions defined:")
+IO.puts("  - SummarizeAction  (structured summary output)")
+IO.puts("  - CritiqueAction   (scores + analysis)")
+IO.puts("  - VerdictAction    (decision + reasoning)")
+```
+
+## Real AI Agents
+
+These are genuine `Jido.AI.Agent` modules — each backed by an LLM via the ReAct
+strategy. Composer detects them automatically because they export `ask_sync/3`
+(the Jido AI convention) but NOT `run_sync/2` or `query_sync/3`.
+
+```elixir
+defmodule Demo.SummarizerAgent do
+  use Jido.AI.Agent,
+    name: "summarizer",
+    description: "Summarizes text using AI reasoning with structured output",
+    model: :fast,
+    tools: [Demo.SummarizeAction],
+    system_prompt: """
+    You are a text summarizer. Read the input carefully, then call the
+    produce_summary tool with a concise summary, key points, and word count.
+    Always use the tool to produce your output.
+    """
+end
+
+defmodule Demo.CriticAgent do
+  use Jido.AI.Agent,
+    name: "critic",
+    description: "Critiques text from multiple angles with structured scores",
+    model: :fast,
+    tools: [Demo.CritiqueAction],
+    system_prompt: """
+    You are a critical reviewer. Analyze the given text for strengths,
+    weaknesses, and score it on clarity (0-100), depth (0-100), and
+    novelty (0-100). Call the produce_critique tool with your analysis.
+    Always use the tool.
+    """
+end
+
+defmodule Demo.VerdictAgent do
+  use Jido.AI.Agent,
+    name: "verdict_agent",
+    description: "Produces accept/reject verdict with reasoning",
+    model: :fast,
+    tools: [Demo.VerdictAction],
+    system_prompt: """
+    You are an editorial judge. Based on the critique scores and analysis,
+    produce a verdict: "accept", "revise", or "reject". Include your
+    confidence level and reasoning. Call the produce_verdict tool with
+    your decision. Always use the tool.
+    """
+end
+
+# Verify Composer detects them correctly
+for mod <- [Demo.SummarizerAgent, Demo.CriticAgent, Demo.VerdictAgent] do
+  ai? = Jido.Composer.Node.ai_agent_module?(mod)
+  IO.puts("  #{mod |> Module.split() |> List.last()}: ai_agent_module?=#{ai?}")
+end
+```
+
+## Deterministic Scoring Action
+
+The scoring step is a pure function — no LLM needed. It reads the critic's structured
+output and computes a weighted score. This shows how deterministic and AI-driven steps
+interleave naturally in a Composer Workflow.
+
+```elixir
+defmodule Demo.ScoreAction do
+  use Jido.Action,
+    name: "score",
+    description: "Computes weighted score from critique scores",
+    schema: [
+      critique: [type: :map, required: false, doc: "Results from the critique step"]
+    ]
+
+  @weights %{clarity: 0.35, depth: 0.30, novelty: 0.35}
+
+  def run(params, _ctx) do
+    critique = params[:critique] || %{}
+
+    # AI agents return text via :text key; structured tools return typed fields
+    clarity = get_score(critique, :clarity_score, 70)
+    depth = get_score(critique, :depth_score, 70)
+    novelty = get_score(critique, :novelty_score, 70)
+
+    scored = [
+      %{dimension: :clarity, raw: clarity, weight: @weights.clarity,
+        weighted: clarity * @weights.clarity / 100},
+      %{dimension: :depth, raw: depth, weight: @weights.depth,
+        weighted: depth * @weights.depth / 100},
+      %{dimension: :novelty, raw: novelty, weight: @weights.novelty,
+        weighted: novelty * @weights.novelty / 100}
+    ]
+
+    total = Enum.reduce(scored, 0.0, fn s, acc -> acc + s.weighted end)
+
+    {:ok, %{
+      breakdown: scored,
+      weighted_total: Float.round(total, 3),
+      threshold: 0.70,
+      above_threshold: total >= 0.70
+    }}
+  end
+
+  defp get_score(critique, key, default) do
+    case Map.get(critique, key) do
+      n when is_integer(n) -> n
+      n when is_float(n) -> round(n)
+      s when is_binary(s) ->
+        case Integer.parse(s) do
+          {n, _} -> n
+          :error -> default
+        end
+      _ -> default
+    end
+  end
+end
+
+IO.puts("ScoreAction defined (deterministic, no LLM).")
+```
+
+## The Analysis Pipeline
+
+Now we wire everything together. The Workflow DSL detects that `SummarizerAgent`,
+`CriticAgent`, and `VerdictAgent` are AI agent modules (they export `ask_sync/3`)
+and automatically wraps them as `AgentNode`s. The `ScoreAction` is detected as a
+plain action and wrapped as an `ActionNode`.
+
+The FSM drives the flow: summarize -> critique -> score -> verdict -> done.
+
+```elixir
+defmodule Demo.AnalysisPipeline do
+  @moduledoc false
+  use Jido.Composer.Workflow,
+    name: "analysis_pipeline",
+    description: "Multi-agent analysis pipeline with real LLM reasoning",
+    nodes: %{
+      summarize: Demo.SummarizerAgent,
+      critique: Demo.CriticAgent,
+      score: Demo.ScoreAction,
+      verdict: Demo.VerdictAgent
+    },
+    transitions: %{
+      {:summarize, :ok} => :critique,
+      {:critique, :ok} => :score,
+      {:score, :ok} => :verdict,
+      {:verdict, :ok} => :done,
+      {:_, :error} => :failed
+    },
+    initial: :summarize
+
+  require Demo.Helpers
+  Demo.Helpers.suppress_agent_doctests()
+end
+
+IO.puts("AnalysisPipeline defined.")
+IO.puts("")
+IO.puts("Flow: summarize(AI) -> critique(AI) -> score(deterministic) -> verdict(AI)")
+```
+
+## Running the Pipeline
+
+Each AI agent starts as a temporary `AgentServer` process, receives the query via
+`ask_sync/3`, reasons using the LLM, calls its tool to produce structured output,
+and shuts down. The Workflow accumulates results under scoped keys.
+
+```elixir
+input_text = """
+Composable agent architectures represent a significant shift in how we build
+AI systems. Rather than monolithic agents that handle everything, the composable
+approach breaks complex tasks into specialized sub-agents, each with focused
+capabilities. A key innovation is using finite state machines to orchestrate
+the flow between agents, providing deterministic control over non-deterministic
+AI reasoning. This hybrid approach — deterministic wiring with adaptive nodes —
+enables both reliability and flexibility. The scoped context model prevents
+data collisions between agents while maintaining a clean data flow.
+"""
+
+agent = Demo.AnalysisPipeline.new()
+
+IO.puts("Running pipeline with real LLM calls...")
+IO.puts("(This may take 10-30 seconds as each agent reasons independently)\n")
+
+result =
+  Demo.AnalysisPipeline.run_sync(agent, %{
+    query: "Analyze the following text:\n\n#{String.trim(input_text)}"
+  })
+
+ctx =
+  case result do
+    {:ok, ctx} ->
+      ctx
+
+    {:error, reason} ->
+      IO.puts("Pipeline error: #{inspect(reason, pretty: true, limit: 20)}")
+      %{}
+  end
+
+IO.puts("=" |> String.duplicate(70))
+IO.puts("  ANALYSIS PIPELINE COMPLETE")
+IO.puts("=" |> String.duplicate(70))
+```
+
+## Results: Step by Step
+
+```elixir
+# -- Step 1: Summary (AI Agent) --
+if ctx != %{} do
+  summary = ctx[:summarize]
+
+  IO.puts("\n--- Step 1: SUMMARY (AI Agent) ---")
+
+  case summary do
+    %{summary: s, key_points: kp} ->
+      IO.puts("Summary: #{s}")
+      IO.puts("Key points: #{kp}")
+      IO.puts("Word count: #{Map.get(summary, :word_count, "N/A")}")
+
+    %{text: text} ->
+      IO.puts("Response: #{text}")
+
+    other ->
+      IO.puts("Raw: #{inspect(other, pretty: true, limit: 500)}")
+  end
+else
+  IO.puts("(skipped — pipeline failed)")
+end
+```
+
+```elixir
+# -- Step 2: Critique (AI Agent) --
+if ctx != %{} do
+  critique = ctx[:critique]
+
+  IO.puts("\n--- Step 2: CRITIQUE (AI Agent) ---")
+
+  case critique do
+    %{strengths: s, weaknesses: w} ->
+      IO.puts("Strengths: #{s}")
+      IO.puts("Weaknesses: #{w}")
+      IO.puts("Clarity:  #{Map.get(critique, :clarity_score, "N/A")}/100")
+      IO.puts("Depth:    #{Map.get(critique, :depth_score, "N/A")}/100")
+      IO.puts("Novelty:  #{Map.get(critique, :novelty_score, "N/A")}/100")
+
+    %{text: text} ->
+      IO.puts("Response: #{text}")
+
+    other ->
+      IO.puts("Raw: #{inspect(other, pretty: true, limit: 500)}")
+  end
+end
+```
+
+```elixir
+# -- Step 3: Score (Deterministic) --
+if ctx != %{} do
+  score = ctx[:score]
+
+  IO.puts("\n--- Step 3: SCORE (Deterministic) ---")
+  IO.puts("No LLM used — pure weighted calculation.\n")
+
+  for s <- score.breakdown do
+    IO.puts("  #{s.dimension}: #{s.raw}/100 x #{s.weight} = #{Float.round(s.weighted, 3)}")
+  end
+
+  IO.puts("\n  Weighted total: #{score.weighted_total}")
+  IO.puts("  Threshold: #{score.threshold}")
+  IO.puts("  Above threshold: #{score.above_threshold}")
+end
+```
+
+```elixir
+# -- Step 4: Verdict (AI Agent) --
+if ctx != %{} do
+  verdict = ctx[:verdict]
+
+  IO.puts("\n--- Step 4: VERDICT (AI Agent) ---")
+
+  case verdict do
+    %{decision: d, reasoning: r} ->
+      IO.puts("Decision:       #{d}")
+      IO.puts("Confidence:     #{Map.get(verdict, :confidence, "N/A")}")
+      IO.puts("Reasoning:      #{r}")
+      IO.puts("Recommendation: #{Map.get(verdict, :recommendation, "N/A")}")
+
+    %{text: text} ->
+      IO.puts("Response: #{text}")
+
+    other ->
+      IO.puts("Raw: #{inspect(other, pretty: true, limit: 500)}")
+  end
+end
+```
+
+## Inspecting the Full Context
+
+The accumulated context shows how each step's output is scoped under its state name.
+No key collisions, even though multiple agents return structurally different data.
+
+```elixir
+if ctx == %{} do
+  IO.puts("(skipped — pipeline failed)")
+else
+
+visible_ctx = Map.delete(ctx, Jido.Composer.Context.ambient_key())
+
+IO.puts("\n--- Full Context Keys ---")
+IO.puts("  #{visible_ctx |> Map.keys() |> Enum.map(&inspect/1) |> Enum.join(", ")}")
+
+IO.puts("\n--- Context Structure ---")
+
+for {key, value} <- visible_ctx do
+  type =
+    cond do
+      not is_map(value) -> "Input (#{inspect(key)})"
+      Map.has_key?(value, :summary) -> "AI Agent (summarizer)"
+      Map.has_key?(value, :strengths) -> "AI Agent (critic)"
+      Map.has_key?(value, :breakdown) -> "Deterministic Action"
+      Map.has_key?(value, :decision) -> "AI Agent (verdict)"
+      Map.has_key?(value, :text) -> "AI Agent (text response)"
+      true -> "Other"
+    end
+
+  IO.puts("  #{key}: #{type}")
+end
+
+end
+```
+
+## What This Demonstrates
+
+This pipeline shows real Jido AI integration with Composer:
+
+1. **Real LLM calls** — Each AI agent uses `Jido.AI.Agent` (ReAct strategy) with
+   actual Anthropic API calls. No simulation.
+
+2. **Automatic detection** — Composer's DSL recognizes `ask_sync/3` agents and wraps
+   them as `AgentNode`s without any manual adapter code.
+
+3. **Structured tools** — Each agent has a tool action that produces typed output,
+   giving the pipeline structured data to work with.
+
+4. **Mixed composition** — AI agents and deterministic actions interleave naturally.
+   The scoring step is pure math; the other three are LLM-driven.
+
+5. **Scoped context** — Each agent's output is preserved under its scope key.
+   Downstream steps read upstream results via `params[:step_name][:field]`.
+
+6. **Query-based tool spec** — When used in an Orchestrator, AI agents expose a
+   `{"query": "string"}` schema instead of leaking internal state fields.
+
+### Jido AI Agent Types
+
+The `jido_ai` package provides multiple agent macros, each with a specialized
+reasoning strategy:
+
+| Macro              | Strategy              | Sync Entry Point  |
+| ------------------ | --------------------- | ----------------- |
+| `Jido.AI.Agent`    | ReAct                 | `ask_sync/3`      |
+| `Jido.AI.CoDAgent` | Chain-of-Draft        | `draft_sync/3`    |
+| `Jido.AI.CoTAgent` | Chain-of-Thought      | `think_sync/3`    |
+| `Jido.AI.ToTAgent` | Tree-of-Thoughts      | `explore_sync/3`  |
+| `Jido.AI.AoTAgent` | Algorithm-of-Thoughts | strategy-specific |
+| `Jido.AI.GoTAgent` | Graph-of-Thoughts     | strategy-specific |
+| `Jido.AI.TrmAgent` | Theory Refinement     | strategy-specific |
+
+Currently, Composer's `AgentNode` detects `ask_sync/3` (ReAct agents). Support for
+strategy-specific entry points is a natural next step.
+
+## Next Steps
+
+- **Strategy adapters** — Extend `AgentNode` to detect `draft_sync/3`, `think_sync/3`,
+  `explore_sync/3` for direct support of CoD/CoT/ToT agents
+- **Add HITL** — Insert a `HumanNode` between scoring and verdict for editorial override
+- **Add FanOut** — Run multiple critics in parallel (one per review dimension)
+- **Add Checkpoint** — Persist state between LLM calls for long-running reviews
+- See `livebooks/03_approval_workflow.livemd` for HITL patterns
+- See `livebooks/05_multi_agent_pipeline.livemd` for the full composition stack

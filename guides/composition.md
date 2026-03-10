@@ -178,6 +178,54 @@ Branch results are merged under their respective keys:
 # context[:review][:background] => %{clear: true, ...}
 ```
 
+## Jido.AI Agents as Nodes
+
+[Jido AI](https://hexdocs.pm/jido_ai) agents (`use Jido.AI.Agent`) are detected automatically and work as first-class nodes in both Workflows and Orchestrators. No wrapper code needed.
+
+```elixir
+# A real Jido.AI agent with LLM-backed reasoning
+defmodule SummarizerAgent do
+  use Jido.AI.Agent,
+    name: "summarizer",
+    description: "Summarizes text using AI reasoning",
+    model: :fast,
+    tools: [SummarizeAction],
+    system_prompt: "Summarize the input. Always use the produce_summary tool."
+end
+
+# Use it directly in a Workflow — Composer detects ask_sync/3 automatically
+defmodule AnalysisPipeline do
+  use Jido.Composer.Workflow,
+    name: "analysis",
+    nodes: %{
+      summarize: SummarizerAgent,    # Jido.AI agent (LLM-driven)
+      score: ScoreAction,            # plain action (deterministic)
+      review: ReviewOrchestrator     # Composer orchestrator
+    },
+    transitions: %{
+      {:summarize, :ok} => :score,
+      {:score, :ok} => :review,
+      {:review, :ok} => :done,
+      {:_, :error} => :failed
+    },
+    initial: :summarize
+end
+```
+
+How it works: Composer detects that the module exports `ask_sync/3` (Jido.AI convention) but not `run_sync/2` or `query_sync/3` (Composer conventions). It then spawns a temporary `AgentServer`, sends the query, collects the result, and shuts down the process.
+
+When used as an orchestrator tool, Jido.AI agents expose a `{"query": "string"}` schema instead of internal state fields, so the LLM sees a clean tool interface.
+
+**Requirements**: The Jido supervision tree must be running. Start it before the pipeline:
+
+```elixir
+{:ok, _} = Supervisor.start_link([{Jido, name: Jido}], strategy: :one_for_one)
+```
+
+**Current scope**: `use Jido.AI.Agent` (ReAct strategy) is supported. Strategy-specific agents (CoDAgent, CoTAgent, ToTAgent) use different entry points and are not yet auto-detected.
+
+See `livebooks/07_jido_ai_bridge.livemd` for a complete working example with real LLM calls.
+
 ## Context Flow Across Boundaries
 
 When nesting, context flows through three layers:

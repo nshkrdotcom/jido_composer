@@ -53,26 +53,105 @@ defmodule Jido.Composer.Node do
     Code.ensure_loaded?(module) && function_exported?(module, :__agent_metadata__, 0)
   end
 
-  @doc "Runs a child agent module synchronously via `run_sync/2` or `query_sync/3`."
+  @doc """
+  Returns `true` if `module` is a Jido.AI agent (exports `ask_sync/3`).
+
+  Jido.AI agents require a running AgentServer process and communicate
+  via `ask_sync(pid, query, opts)` rather than struct-based `run_sync/2`.
+  """
+  @spec ai_agent_module?(module()) :: boolean()
+  def ai_agent_module?(module) do
+    agent_module?(module) && function_exported?(module, :ask_sync, 3) &&
+      not function_exported?(module, :run_sync, 2) &&
+      not function_exported?(module, :query_sync, 3)
+  end
+
+  @doc """
+  Runs a child agent module synchronously.
+
+  Supports three agent types:
+  - Composer Workflow agents (`run_sync/2`)
+  - Composer Orchestrator agents (`query_sync/3`)
+  - Jido.AI agents (`ask_sync/3` via a temporary AgentServer process)
+  """
   @spec execute_child_sync(module(), map()) :: {:ok, term()} | {:error, term()}
   def execute_child_sync(child_module, spawn_opts) do
     context = Map.get(spawn_opts, :context, %{})
-    child_agent = child_module.new()
 
     cond do
       function_exported?(child_module, :run_sync, 2) ->
+        child_agent = child_module.new()
         child_module.run_sync(child_agent, context)
 
       function_exported?(child_module, :query_sync, 3) ->
+        child_agent = child_module.new()
         query = Map.get(context, :query, "")
         child_module.query_sync(child_agent, query, context)
+
+      function_exported?(child_module, :ask_sync, 3) ->
+        execute_ai_agent_sync(child_module, context)
 
       true ->
         {:error,
          Jido.Composer.Error.execution_error(
-           "Agent module does not export run_sync/2 or query_sync/3",
+           "Agent module does not export run_sync/2, query_sync/3, or ask_sync/3",
            node: inspect(child_module)
          )}
     end
   end
+
+  @doc false
+  @spec execute_ai_agent_sync(module(), map()) :: {:ok, term()} | {:error, term()}
+  def execute_ai_agent_sync(child_module, context) do
+    query = Map.get(context, :query, Map.get(context, "query", ""))
+    timeout = Map.get(context, :timeout, 30_000)
+
+    with {:ok, pid} <- start_ai_agent(child_module) do
+      try do
+        child_module.ask_sync(pid, query, timeout: timeout)
+      after
+        stop_ai_agent(pid)
+      end
+    end
+  end
+
+  defp start_ai_agent(child_module) do
+    cond do
+      # Prefer start_link for direct linkage (no supervisor required)
+      function_exported?(child_module, :start_link, 1) ->
+        child_module.start_link([])
+
+      Code.ensure_loaded?(Jido.AgentServer) &&
+          function_exported?(Jido.AgentServer, :start_link, 1) ->
+        Jido.AgentServer.start_link(agent: child_module)
+
+      true ->
+        {:error,
+         Jido.Composer.Error.execution_error(
+           "Cannot start AI agent — module must export start_link/1 or Jido.AgentServer must be available",
+           node: inspect(child_module)
+         )}
+    end
+  end
+
+  defp stop_ai_agent(pid) when is_pid(pid) do
+    ref = Process.monitor(pid)
+
+    if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
+
+    # Wait for the process (and its supervised children) to fully terminate.
+    # AgentServer spawns child workers under a DynamicSupervisor; the parent
+    # stop returns before child cleanup is complete, causing Registry collisions
+    # if a new agent starts immediately after.
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        Process.sleep(500)
+    after
+      5_000 -> Process.demonitor(ref, [:flush])
+    end
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp stop_ai_agent(_), do: :ok
 end

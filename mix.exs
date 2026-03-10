@@ -178,7 +178,8 @@ defmodule JidoComposer.MixProject do
         "livebooks/03_approval_workflow.livemd",
         "livebooks/04_llm_orchestrator.livemd",
         "livebooks/05_multi_agent_pipeline.livemd",
-        "livebooks/06_observability.livemd"
+        "livebooks/06_observability.livemd",
+        "livebooks/07_jido_ai_bridge.livemd"
       ],
       groups_for_extras: [
         Guides: [
@@ -196,7 +197,8 @@ defmodule JidoComposer.MixProject do
           "livebooks/03_approval_workflow.livemd",
           "livebooks/04_llm_orchestrator.livemd",
           "livebooks/05_multi_agent_pipeline.livemd",
-          "livebooks/06_observability.livemd"
+          "livebooks/06_observability.livemd",
+          "livebooks/07_jido_ai_bridge.livemd"
         ]
       ],
       before_closing_body_tag: &before_closing_body_tag/1

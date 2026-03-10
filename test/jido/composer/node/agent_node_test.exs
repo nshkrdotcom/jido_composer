@@ -1,11 +1,13 @@
 defmodule Jido.Composer.Node.AgentNodeTest do
   use ExUnit.Case, async: true
 
+  alias Jido.Composer.Node
   alias Jido.Composer.Node.AgentNode
 
   alias Jido.Composer.TestAgents.{
     EchoAgent,
     CounterAgent,
+    FakeAIAgent,
     TestWorkflowAgent,
     TestOrchestratorAgent
   }
@@ -211,7 +213,7 @@ defmodule Jido.Composer.Node.AgentNodeTest do
     test "run/3 returns ExecutionError for agents without sync entry point" do
       {:ok, node} = AgentNode.new(EchoAgent)
       assert {:error, %Jido.Composer.Error.ExecutionError{} = err} = AgentNode.run(node, %{}, [])
-      assert err.msg =~ "does not export run_sync/2 or query_sync/3"
+      assert err.msg =~ "does not export run_sync/2, query_sync/3, or ask_sync/3"
     end
   end
 
@@ -224,6 +226,104 @@ defmodule Jido.Composer.Node.AgentNodeTest do
     test "timeout can be overridden in opts" do
       {:ok, node} = AgentNode.new(EchoAgent, opts: [timeout: 60_000])
       assert AgentNode.timeout(node) == 60_000
+    end
+  end
+
+  # -- Jido.AI agent integration --
+
+  describe "ai_agent_module? detection" do
+    test "returns true for Jido.AI-style agents (ask_sync/3 only)" do
+      assert Node.ai_agent_module?(FakeAIAgent)
+    end
+
+    test "returns false for plain agents without sync entry points" do
+      refute Node.ai_agent_module?(EchoAgent)
+    end
+
+    test "returns false for workflow agents (have run_sync/2)" do
+      refute Node.ai_agent_module?(TestWorkflowAgent)
+    end
+
+    test "returns false for orchestrator agents (have query_sync/3)" do
+      refute Node.ai_agent_module?(TestOrchestratorAgent)
+    end
+
+    test "returns false for non-agent modules" do
+      refute Node.ai_agent_module?(String)
+    end
+  end
+
+  describe "Jido.AI agent as AgentNode" do
+    test "new/2 accepts a Jido.AI agent module" do
+      assert {:ok, node} = AgentNode.new(FakeAIAgent)
+      assert node.agent_module == FakeAIAgent
+      assert node.mode == :sync
+    end
+
+    test "name/1 delegates to AI agent module" do
+      {:ok, node} = AgentNode.new(FakeAIAgent)
+      assert AgentNode.name(node) == "fake_ai_agent"
+    end
+
+    test "description/1 delegates to AI agent module" do
+      {:ok, node} = AgentNode.new(FakeAIAgent)
+      assert AgentNode.description(node) == "A fake AI agent for testing Composer integration"
+    end
+
+    test "to_tool_spec/1 returns query-based schema for AI agents" do
+      {:ok, node} = AgentNode.new(FakeAIAgent)
+      spec = AgentNode.to_tool_spec(node)
+
+      assert spec.name == "fake_ai_agent"
+      assert spec.description == "A fake AI agent for testing Composer integration"
+      assert spec.parameter_schema["type"] == "object"
+      assert spec.parameter_schema["required"] == ["query"]
+      assert spec.parameter_schema["properties"]["query"]["type"] == "string"
+    end
+
+    test "to_tool_spec/1 returns action schema for non-AI agents" do
+      {:ok, node} = AgentNode.new(EchoAgent)
+      spec = AgentNode.to_tool_spec(node)
+
+      # EchoAgent has a NimbleOptions schema, not a query-based one
+      assert spec.name == "echo_agent"
+      refute spec.parameter_schema["required"] == ["query"]
+    end
+
+    test "run/3 calls ask_sync via start_link for AI agents" do
+      {:ok, node} = AgentNode.new(FakeAIAgent)
+      context = %{query: "What is 2+2?"}
+
+      assert {:ok, %{result: result}} = AgentNode.run(node, context, [])
+      assert result == "AI response to: What is 2+2?"
+    end
+
+    test "run/3 extracts query from string key if atom key missing" do
+      {:ok, node} = AgentNode.new(FakeAIAgent)
+      context = %{"query" => "hello from string key"}
+
+      assert {:ok, %{result: result}} = AgentNode.run(node, context, [])
+      assert result == "AI response to: hello from string key"
+    end
+
+    test "run/3 uses empty string when no query provided" do
+      {:ok, node} = AgentNode.new(FakeAIAgent)
+
+      assert {:ok, %{result: result}} = AgentNode.run(node, %{}, [])
+      assert result == "AI response to: "
+    end
+  end
+
+  describe "execute_child_sync with AI agents" do
+    test "dispatches to ask_sync for AI agent modules" do
+      result = Node.execute_child_sync(FakeAIAgent, %{context: %{query: "test query"}})
+      assert {:ok, "AI response to: test query"} = result
+    end
+
+    test "still dispatches to run_sync for workflow agents" do
+      context = %{extract: %{records: [%{id: 1, source: "test"}], count: 1}}
+      result = Node.execute_child_sync(TestWorkflowAgent, %{context: context})
+      assert {:ok, _} = result
     end
   end
 end

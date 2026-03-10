@@ -113,18 +113,50 @@ AgentNode supports three configuration modes for directive-based execution:
 `signal_type` overrides the default signal sent to children; `on_state` (streaming
 mode) controls which child states emit upstream events.
 
+#### Jido.AI Agent Support
+
+AgentNode also supports [Jido AI](https://hexdocs.pm/jido_ai) agents as
+first-class nodes. Jido.AI agents use a process-based interface (`ask_sync/3`)
+instead of the struct-based `run_sync/2` used by Composer agents.
+
+Detection is automatic via `Node.ai_agent_module?/1`:
+
+| Check                          | Meaning                           |
+| ------------------------------ | --------------------------------- |
+| Exports `ask_sync/3`           | Has the Jido.AI agent interface   |
+| Does NOT export `run_sync/2`   | Not a Composer Workflow agent     |
+| Does NOT export `query_sync/3` | Not a Composer Orchestrator agent |
+
+When a Jido.AI agent is used as a workflow node or orchestrator tool:
+
+1. Composer spawns a temporary `Jido.AgentServer` process
+2. Sends the query via `ask_sync(pid, query, opts)`
+3. Receives the result
+4. Stops the process (with a cleanup delay for child worker shutdown)
+
+Tool spec generation also adapts: Jido.AI agents expose a `{"query": "string"}`
+schema instead of leaking internal state fields. This makes them clean
+orchestrator tools.
+
+Currently supported: `use Jido.AI.Agent` (ReAct strategy) which generates
+`ask_sync/3`. Strategy-specific agents (CoDAgent, CoTAgent, ToTAgent) use
+different entry points (`draft_sync/3`, `think_sync/3`, `explore_sync/3`) and
+are not yet detected — this is a natural extension point.
+
+See `livebooks/07_jido_ai_bridge.livemd` for a working example.
+
 #### Dual-Path Execution
 
 AgentNode has two execution paths that coexist:
 
-| Path                 | Used by                                  | How                                             |
-| -------------------- | ---------------------------------------- | ----------------------------------------------- |
-| `run/3` (sync)       | FanOutNode branches, `run_sync`, testing | Delegates to child's `run_sync` or `query_sync` |
-| SpawnAgent directive | AgentServer runtime, async, streaming    | Full process lifecycle via signals              |
+| Path                 | Used by                                  | How                                                          |
+| -------------------- | ---------------------------------------- | ------------------------------------------------------------ |
+| `run/3` (sync)       | FanOutNode branches, `run_sync`, testing | Delegates to child's `run_sync`, `query_sync`, or `ask_sync` |
+| SpawnAgent directive | AgentServer runtime, async, streaming    | Full process lifecycle via signals                           |
 
-In sync mode, `run/3` calls child `run_sync/2` or `query_sync/3`, so AgentNodes
-can execute inside FanOut branches while strategies still use SpawnAgent for
-process lifecycle management.
+In sync mode, `run/3` calls child `run_sync/2`, `query_sync/3`, or `ask_sync/3`
+(for Jido.AI agents), so AgentNodes can execute inside FanOut branches while
+strategies still use SpawnAgent for process lifecycle management.
 
 #### `execute_child_sync` vs `AgentNode.run/3`
 

@@ -35,9 +35,11 @@ Compose agents and actions into higher-order flows via two nestable patterns: de
 
 - Any node can be another Workflow or Orchestrator (arbitrary nesting).
 - AgentNode wraps a `Jido.Agent` as a node — the child runs its own strategy internally.
+- **Jido.AI agents** (`use Jido.AI.Agent`) are auto-detected via `ask_sync/3` and work as first-class nodes. Composer spawns a temporary AgentServer, queries it, and shuts it down. Requires the Jido supervision tree to be running.
+- When used as orchestrator tools, Jido.AI agents expose `{"query": "string"}` schema (not internal state fields).
 - Context flows top-down; child results merge into parent context under the node key.
 - FanOutNode `fork_fns` receive the current context and return branch-specific params.
-- Control spectrum: Workflow (fully deterministic) → Orchestrator (LLM-driven) → mixed nesting.
+- Control spectrum: Workflow (fully deterministic) → Orchestrator (LLM-driven) → Jido.AI agent (ReAct) → mixed nesting.
 
 ## HITL & Persistence
 
