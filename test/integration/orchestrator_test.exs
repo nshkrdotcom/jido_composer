@@ -77,6 +77,63 @@ defmodule Jido.Composer.Integration.OrchestratorTest do
 
   # -- Edge-case tests (stubs only — no cassette equivalent) --
 
+  describe "tool param isolation (regression)" do
+    test "sequential tool calls do not leak scoped results into subsequent tool params" do
+      # First call: add(value=10, amount=5) → result scoped under :add
+      # Second call: echo(message="hello") → should NOT see :add in its params
+      LLMStub.setup([
+        {:tool_calls,
+         [%{id: "call_1", name: "add", arguments: %{"value" => 10.0, "amount" => 5.0}}]},
+        {:tool_calls, [%{id: "call_2", name: "echo", arguments: %{"message" => "hello"}}]},
+        {:final_answer, "Done"}
+      ])
+
+      agent = ToolOrchestrator.new()
+      {agent, directives} = ToolOrchestrator.query(agent, "Do math then echo")
+
+      # Custom loop that captures tool instruction params
+      {agent, captured_params} = execute_capturing_params(ToolOrchestrator, agent, directives)
+
+      strat = StratState.get(agent)
+      assert strat.status == :completed
+
+      # Both tools should have produced results
+      assert strat.context.working[:add][:result] in [15, 15.0]
+      assert strat.context.working[:echo][:echoed] == "hello"
+
+      # The echo tool's params must NOT contain the :add scoped result
+      echo_params = captured_params["call_2"]
+      assert echo_params != nil, "echo tool params were not captured"
+      refute Map.has_key?(echo_params, :add), "scoped result from 'add' leaked into echo params"
+      assert Map.has_key?(echo_params, :message), "echo params missing its own 'message' key"
+    end
+  end
+
+  defp execute_capturing_params(agent_module, agent, directives) do
+    run_capturing_loop(agent_module, agent, directives, %{})
+  end
+
+  defp run_capturing_loop(_agent_module, agent, [], captured), do: {agent, captured}
+
+  defp run_capturing_loop(agent_module, agent, [directive | rest], captured) do
+    case directive do
+      %Directive.RunInstruction{instruction: instr, result_action: result_action, meta: meta} ->
+        # Capture tool call params (keyed by call_id from meta)
+        captured =
+          case meta do
+            %{call_id: call_id} -> Map.put(captured, call_id, instr.params)
+            _ -> captured
+          end
+
+        payload = execute_stub_instruction(instr, meta)
+        {agent, new_directives} = agent_module.cmd(agent, {result_action, payload})
+        run_capturing_loop(agent_module, agent, new_directives ++ rest, captured)
+
+      _other ->
+        run_capturing_loop(agent_module, agent, rest, captured)
+    end
+  end
+
   describe "max iteration limit" do
     test "halts with error when LLM keeps calling tools beyond limit" do
       loop_call = %{id: "call_loop", name: "echo", arguments: %{"message" => "loop"}}

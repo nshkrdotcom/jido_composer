@@ -706,8 +706,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     flat_context =
       case node do
         %ActionNode{} ->
-          merged_ctx = %{ctx | working: Map.merge(ctx.working, tool_args)}
-          Context.to_flat_map(merged_ctx)
+          clean_ctx = %{ctx | working: tool_args}
+          Context.to_flat_map(clean_ctx)
 
         _ ->
           Context.to_flat_map(ctx)
