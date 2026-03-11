@@ -1,5 +1,9 @@
 # Jido Composer
 
+[![CI](https://github.com/lostbean/jido_composer/actions/workflows/ci.yml/badge.svg)](https://github.com/lostbean/jido_composer/actions/workflows/ci.yml)
+[![Hex.pm](https://img.shields.io/hexpm/v/jido_composer.svg)](https://hex.pm/packages/jido_composer)
+[![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/jido_composer)
+
 Build composable agent topologies in Elixir. Mix deterministic workflows (FSM)
 with adaptive orchestrators (LLM) in any combination — they nest arbitrarily.
 Human approval gates and durable persistence are built in, not bolted on.
