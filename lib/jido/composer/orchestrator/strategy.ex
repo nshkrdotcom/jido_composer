@@ -167,8 +167,8 @@ defmodule Jido.Composer.Orchestrator.Strategy do
     agent = update_obs(agent, &Obs.finish_llm_span(&1, llm_measurements))
 
     case params do
-      %{status: :ok, result: %{response: response, conversation: conversation}} ->
-        handle_llm_response(agent, response, conversation)
+      %{status: :ok, result: %{response: response, conversation: conversation} = result} ->
+        handle_llm_response(agent, response, conversation, result[:finish_reason])
 
       %{status: :error, result: %{error: reason}} ->
         agent =
@@ -551,7 +551,7 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
   # -- Private --
 
-  defp handle_llm_response(agent, response, conversation) do
+  defp handle_llm_response(agent, response, conversation, finish_reason) do
     agent =
       StratState.update(agent, fn s ->
         %{s | conversation: conversation, iteration: s.iteration + 1}
@@ -559,6 +559,33 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
     state = StratState.get(agent)
 
+    if finish_reason == :length do
+      require Logger
+
+      Logger.error("LLM response truncated (finish_reason: :length), failing fast",
+        iteration: state.iteration,
+        query: state.query
+      )
+
+      agent =
+        StratState.update(agent, fn s ->
+          %{
+            s
+            | status: :error,
+              result:
+                "LLM response truncated (finish_reason: :length) — increase max_tokens or reduce prompt size"
+          }
+        end)
+
+      agent = update_obs(agent, &Obs.finish_iteration_span(&1, %{error: "truncated"}))
+      agent = finish_agent_span(agent, %{error: "truncated"})
+      {agent, []}
+    else
+      handle_llm_response_by_type(agent, response, state)
+    end
+  end
+
+  defp handle_llm_response_by_type(agent, response, state) do
     case response do
       {:final_answer, text} ->
         agent =

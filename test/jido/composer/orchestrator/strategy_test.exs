@@ -1441,15 +1441,103 @@ defmodule Jido.Composer.Orchestrator.StrategyTest do
     result = LLMStub.execute(instr.params)
 
     case result do
-      {:ok, %{response: response, conversation: conversation}} ->
-        %{
-          status: :ok,
-          result: %{response: response, conversation: conversation},
-          meta: instr.context
-        }
+      {:ok, %{response: response, conversation: conversation} = res} ->
+        result_map = %{response: response, conversation: conversation}
+
+        result_map =
+          if res[:finish_reason],
+            do: Map.put(result_map, :finish_reason, res[:finish_reason]),
+            else: result_map
+
+        %{status: :ok, result: result_map, meta: instr.context}
 
       {:error, reason} ->
         %{status: :error, result: %{error: reason}, meta: instr.context}
+    end
+  end
+
+  defp build_llm_result(response, opts \\ []) do
+    result = %{response: response, conversation: [{:stub_turn, response}]}
+
+    result =
+      if opts[:finish_reason],
+        do: Map.put(result, :finish_reason, opts[:finish_reason]),
+        else: result
+
+    %{status: :ok, result: result, meta: %{}}
+  end
+
+  describe "cmd/3 :orchestrator_llm_result truncation (finish_reason: :length)" do
+    @describetag capture_log: true
+
+    test "finish_reason :length with final_answer returns error" do
+      LLMStub.setup([{:final_answer, "stub"}])
+      agent = init_agent()
+
+      {agent, [_llm_directive]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "test"})], ctx())
+
+      # Bypass LLMStub — directly build result with finish_reason: :length
+      params = build_llm_result({:final_answer, "partial answer"}, finish_reason: :length)
+
+      {agent, directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, params)], ctx())
+
+      state = get_state(agent)
+      assert state.status == :error
+      assert state.result =~ "truncated"
+      assert directives == []
+    end
+
+    test "finish_reason :length with tool_calls returns error" do
+      LLMStub.setup([{:final_answer, "stub"}])
+      agent = init_agent()
+
+      {agent, [_llm_directive]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "test"})], ctx())
+
+      tool_call = %{id: "call_1", name: "some_tool", arguments: %{"arg" => "val"}}
+      params = build_llm_result({:tool_calls, [tool_call]}, finish_reason: :length)
+
+      {agent, directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, params)], ctx())
+
+      state = get_state(agent)
+      assert state.status == :error
+      assert state.result =~ "truncated"
+      assert directives == []
+    end
+
+    test "finish_reason :stop with final_answer completes normally" do
+      LLMStub.setup([{:final_answer, "stub"}])
+      agent = init_agent()
+
+      {agent, [_llm_directive]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "test"})], ctx())
+
+      params = build_llm_result({:final_answer, "full answer"}, finish_reason: :stop)
+
+      {agent, _directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, params)], ctx())
+
+      state = get_state(agent)
+      assert state.status == :completed
+    end
+
+    test "absent finish_reason with final_answer completes normally" do
+      LLMStub.setup([{:final_answer, "stub"}])
+      agent = init_agent()
+
+      {agent, [_llm_directive]} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_start, %{query: "test"})], ctx())
+
+      params = build_llm_result({:final_answer, "full answer"})
+
+      {agent, _directives} =
+        Strategy.cmd(agent, [make_instruction(:orchestrator_llm_result, params)], ctx())
+
+      state = get_state(agent)
+      assert state.status == :completed
     end
   end
 end
