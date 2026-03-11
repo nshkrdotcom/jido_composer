@@ -124,6 +124,20 @@ def deps do
 end
 ```
 
+## Composer vs Jido AI
+
+Both libraries are part of the [Jido](https://github.com/agentjido/jido) ecosystem and share
+the same action, signal, and LLM foundations. They solve different problems:
+
+- **Composer** — Composable flows: deterministic pipelines, parallel branches, human approval
+  gates, checkpoint/resume. You define the structure; the FSM enforces it.
+- **[Jido AI](https://github.com/agentjido/jido_ai)** — AI reasoning runtime: 8 strategy
+  families (ReAct, CoT, ToT, ...), request handles, plugins, skills.
+
+They work together — wrap a Jido AI agent as a node inside a Composer workflow to
+get structured flow control around open-ended reasoning. See the
+[full comparison](guides/composer-vs-jido-ai.md).
+
 ## Documentation
 
 - [Getting Started](guides/getting-started.md) — First workflow in 5 minutes
@@ -133,6 +147,7 @@ end
 - [Human-in-the-Loop](guides/hitl.md) — HumanNode, approval gates, suspension, persistence
 - [Observability](guides/observability.md) — OTel spans, tracer setup, span hierarchy
 - [Testing](guides/testing.md) — ReqCassette, LLMStub, test layers
+- [Composer vs Jido AI](guides/composer-vs-jido-ai.md) — When to use which, how they combine
 - Interactive demos in `livebooks/`
 
 ## License

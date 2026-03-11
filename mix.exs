@@ -172,6 +172,7 @@ defmodule JidoComposer.MixProject do
         "guides/hitl.md",
         "guides/observability.md",
         "guides/testing.md",
+        "guides/composer-vs-jido-ai.md",
         # Livebooks
         "livebooks/01_etl_pipeline.livemd",
         "livebooks/02_branching_and_parallel.livemd",
@@ -189,7 +190,8 @@ defmodule JidoComposer.MixProject do
           "guides/composition.md",
           "guides/hitl.md",
           "guides/observability.md",
-          "guides/testing.md"
+          "guides/testing.md",
+          "guides/composer-vs-jido-ai.md"
         ],
         Livebooks: [
           "livebooks/01_etl_pipeline.livemd",
