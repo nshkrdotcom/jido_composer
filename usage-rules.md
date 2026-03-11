@@ -30,6 +30,8 @@ Compose agents and actions into higher-order flows via two nestable patterns: de
 - Approval gates: per-tool `requires_approval: true` + `approval_policy` function. Gated tool calls emit `SuspendForHuman`.
 - Streaming: `stream: true` uses Finch directly, bypassing Req plugs. Disable streaming when using cassette/stub plugs for testing.
 - LLM config: DSL supports `temperature`, `max_tokens`, `stream`, `termination_tool`, `llm_opts`.
+- **Runtime configuration**: `configure/2` overrides strategy state after `new/0` but before `query_sync/3`. Accepts `:system_prompt`, `:nodes`, `:model`, `:temperature`, `:max_tokens`, `:req_options`, `:conversation`. The `:nodes` override rebuilds tools/name_atoms/schema_keys internally and handles termination tool dedup.
+- **Read accessors**: `get_action_modules/1` returns current node modules; `get_termination_module/1` returns the termination tool module. Use for read-filter-write patterns (RBAC).
 
 ## Composition
 

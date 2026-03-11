@@ -145,6 +145,75 @@ for the full approval flow.
 | `new(opts)`                         | agent struct                          | Creates an orchestrator agent instance with strategy state initialized                                                |
 | `query(agent, query, context)`      | `{agent, directives}`                 | Sends a query with context, returns directives for the runtime to execute the ReAct loop                              |
 | `query_sync(agent, query, context)` | `{:ok, result}` \| `{:error, reason}` | Sends a query and blocks until the LLM produces a final answer. Intended for testing — not for use inside AgentServer |
+| `configure(agent, overrides)`       | agent struct                          | Applies runtime overrides to strategy state before query. See [Runtime Configuration](#runtime-configuration)         |
+| `get_action_modules(agent)`         | `[module()]`                          | Returns the action/agent modules currently configured as nodes                                                        |
+| `get_termination_module(agent)`     | `module() \| nil`                     | Returns the termination tool module, or nil                                                                           |
+
+## Runtime Configuration
+
+Orchestrators are defined declaratively via the DSL, but many fields need to be
+overridden at runtime — dynamic system prompts, RBAC-filtered tools, model
+selection per agent mode, pre-loaded conversation history, or test cassette
+injection.
+
+`configure/2` applies overrides after `new/0` but before `query_sync/3`:
+
+```elixir
+agent = MyOrchestrator.new()
+
+agent = MyOrchestrator.configure(agent,
+  system_prompt: dynamic_prompt,
+  nodes: filtered_action_modules,
+  model: "anthropic:claude-sonnet-4-20250514",
+  temperature: 0.7,
+  max_tokens: 8192,
+  req_options: [plug: {ReqCassette, cassette: "test"}],
+  conversation: preloaded_context
+)
+
+{:ok, result} = MyOrchestrator.query_sync(agent, user_message, ambient)
+```
+
+### Overridable Fields
+
+| Key             | Type                 | Behaviour                                                                                 |
+| --------------- | -------------------- | ----------------------------------------------------------------------------------------- |
+| `system_prompt` | `String.t()`         | Replaces the DSL system prompt                                                            |
+| `nodes`         | `[module()]`         | Rebuilds nodes, tools, name_atoms, schema_keys internally. Handles termination tool dedup |
+| `model`         | `String.t()`         | Replaces the model identifier                                                             |
+| `temperature`   | `float`              | Replaces the temperature                                                                  |
+| `max_tokens`    | `integer`            | Replaces max tokens                                                                       |
+| `req_options`   | `keyword()`          | Replaces HTTP options (e.g. for test cassette injection)                                  |
+| `conversation`  | `ReqLLM.Context.t()` | Sets or replaces conversation context for multi-turn pre-loading                          |
+
+### Read-Filter-Write Pattern
+
+Read accessors enable inspecting the current configuration before modifying it:
+
+```elixir
+# Read what the DSL declared
+action_modules = MyOrchestrator.get_action_modules(agent)
+termination_mod = MyOrchestrator.get_termination_module(agent)
+
+# Filter by role (RBAC)
+filtered = Enum.filter(action_modules, &my_rbac_check/1)
+
+# Write back — configure handles node/tool/atom rebuild internally
+agent = MyOrchestrator.configure(agent, nodes: filtered)
+```
+
+### Node Override Internals
+
+When `:nodes` is passed to `configure/2`, it:
+
+1. Builds `%ActionNode{}`/`%AgentNode{}` structs from the module list
+2. Derives `ReqLLM.Tool` structs via `AgentTool.to_tool/1`
+3. Rebuilds the `name_atoms` and `schema_keys` maps
+4. Re-applies termination tool deduplication — if the termination module is
+   already in the node list, it is not duplicated; if absent, it is appended
+
+Callers never need to exclude the termination tool from the node list or
+manually manage `name_atoms`.
 
 ## Design Decisions
 

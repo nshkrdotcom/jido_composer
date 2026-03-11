@@ -102,6 +102,21 @@ defmodule Jido.Composer.Orchestrator.DSL do
         {agent, directives} = query(agent, query, context)
         Jido.Composer.Orchestrator.DSL.__query_sync_loop__(__MODULE__, agent, directives)
       end
+
+      @doc "Applies runtime overrides to strategy state before query. See `Jido.Composer.Orchestrator.Configure`."
+      @spec configure(Jido.Agent.t(), keyword()) :: Jido.Agent.t()
+      defdelegate configure(agent, overrides),
+        to: Jido.Composer.Orchestrator.Configure
+
+      @doc "Returns the list of action/agent modules currently configured as nodes."
+      @spec get_action_modules(Jido.Agent.t()) :: [module()]
+      defdelegate get_action_modules(agent),
+        to: Jido.Composer.Orchestrator.Configure
+
+      @doc "Returns the termination tool module, or nil if none configured."
+      @spec get_termination_module(Jido.Agent.t()) :: module() | nil
+      defdelegate get_termination_module(agent),
+        to: Jido.Composer.Orchestrator.Configure
     end
   end
 

@@ -177,6 +177,73 @@ When the LLM requests more tool calls than the concurrency limit, excess calls a
 
 > Orchestrators sit at the **adaptive** end of the control spectrum — the LLM decides which tools to call and in what order. For fully deterministic pipelines, see [Workflows](workflows.md). For mixing both patterns, see [Composition & Nesting](composition.md).
 
+## Runtime Configuration
+
+The DSL sets defaults at compile time, but `configure/2` lets you override fields at runtime — after `new/0` but before `query_sync/3`:
+
+```elixir
+agent = MathAssistant.new()
+
+agent = MathAssistant.configure(agent,
+  system_prompt: "You are a math tutor helping #{user.name}.",
+  model: "anthropic:claude-sonnet-4-20250514",
+  temperature: 0.3,
+  max_tokens: 4096,
+  req_options: [plug: cassette_plug]
+)
+
+{:ok, answer} = MathAssistant.query_sync(agent, "What is 5 + 3?")
+```
+
+### Overridable Fields
+
+| Key              | Type                 | Description                                   |
+| ---------------- | -------------------- | --------------------------------------------- |
+| `:system_prompt` | `String.t()`         | Replace the system prompt                     |
+| `:nodes`         | `[module()]`         | Replace available tools (rebuilds internally) |
+| `:model`         | `String.t()`         | Replace the model identifier                  |
+| `:temperature`   | `float()`            | Replace sampling temperature                  |
+| `:max_tokens`    | `integer()`          | Replace token budget                          |
+| `:req_options`   | `keyword()`          | Replace HTTP options (test plugs, etc.)       |
+| `:conversation`  | `ReqLLM.Context.t()` | Pre-load conversation history for multi-turn  |
+
+### Filtering Tools (RBAC)
+
+Use `get_action_modules/1` to read the DSL-declared tools, filter them, then set them back:
+
+```elixir
+agent = MyOrchestrator.new()
+
+# Read what the DSL declared
+all_modules = MyOrchestrator.get_action_modules(agent)
+
+# Filter by user role
+visible = Enum.filter(all_modules, fn mod ->
+  mod in allowed_tools_for(current_user.role)
+end)
+
+# Write back — handles node/tool rebuild + termination tool dedup
+agent = MyOrchestrator.configure(agent, nodes: visible)
+```
+
+When `:nodes` is overridden, `configure/2` rebuilds `ActionNode`/`AgentNode` structs, `ReqLLM.Tool` descriptions, and internal lookup maps. If a `termination_tool` was declared in the DSL, it is automatically deduplicated — you don't need to exclude it from the node list.
+
+### Pre-loading Conversation History
+
+For multi-turn agents that persist conversations to a database:
+
+```elixir
+# Load prior messages from your database
+messages = MyDB.load_messages(conversation_id)
+context = ReqLLM.Context.new(messages)
+
+agent = MyOrchestrator.new()
+agent = MyOrchestrator.configure(agent, conversation: context)
+{:ok, answer} = MyOrchestrator.query_sync(agent, new_user_message)
+```
+
+> See `Jido.Composer.Orchestrator.Configure` for the full API reference.
+
 ## Context Accumulation
 
 Tool results are scoped under the tool name in the working context, just like workflow states:

@@ -137,6 +137,7 @@ defmodule JidoComposer.MixProject do
           Jido.Composer.Orchestrator,
           Jido.Composer.Orchestrator.DSL,
           Jido.Composer.Orchestrator.Strategy,
+          Jido.Composer.Orchestrator.Configure,
           Jido.Composer.Orchestrator.AgentTool,
           Jido.Composer.Orchestrator.LLMAction
         ],
