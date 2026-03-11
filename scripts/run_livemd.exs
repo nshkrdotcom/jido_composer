@@ -109,7 +109,7 @@ defmodule LivemdRunner do
     end
   end
 
-  # Rewrite Mix.install to use path: for jido_composer relative to the livebook's dir.
+  # Rewrite Mix.install to use path: for jido_composer instead of the hex version.
   # In standalone mode, __DIR__ won't be the livebook's dir, so resolve it now.
   defp rewrite_mix_install(cell, livebook_path) do
     if mix_install_cell?(cell) do
@@ -117,8 +117,8 @@ defmodule LivemdRunner do
 
       cell
       |> String.replace(
-        ~r/Path\.join\(__DIR__,\s*"\.\."\)/,
-        inspect(project_root)
+        ~r/\{:jido_composer,\s*"[^"]+"\}/,
+        "{:jido_composer, path: #{inspect(project_root)}}"
       )
     else
       cell
