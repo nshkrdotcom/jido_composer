@@ -772,6 +772,14 @@ defmodule Jido.Composer.Orchestrator.Strategy do
         msgs -> msgs
       end
 
+    # Append pending tool results that LLMAction will add to the conversation.
+    # Without this, the LLM span's input_messages would be missing the most
+    # recent tool results (they only enter the conversation inside LLMAction).
+    input_messages =
+      Enum.reduce(state.tool_concurrency.completed, input_messages, fn tr, acc ->
+        acc ++ [%{role: "tool", content: Jason.encode!(tr.result)}]
+      end)
+
     agent =
       update_obs(
         agent,
