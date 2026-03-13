@@ -167,11 +167,20 @@ defmodule Jido.Composer.OtelInputMessagesTest do
       assert length(llm_spans) == 2,
              "Expected 2 LLM spans, got #{length(llm_spans)}: #{inspect(Enum.map(llm_spans, &OTH.span_name/1))}"
 
+      # The first LLM span should include the system prompt even though
+      # conversation is nil at that point (system_prompt is an option, not a message).
+      first_llm = Enum.at(llm_spans, 0)
+      first_attrs = OTH.span_attributes(first_llm)
+      first_roles = get_input_message_roles(first_attrs)
+
+      assert first_roles == ["system", "user"],
+             "Expected first LLM span to have [system, user], got #{inspect(first_roles)}"
+
       # The second LLM span should have input_messages that include:
       # 0: system prompt (role=system)
       # 1: user query (role=user)
       # 2: assistant with tool_calls (role=assistant)
-      # 3: tool result (role=tool)   <-- THIS IS THE BUG: currently missing
+      # 3: tool result (role=tool)
       second_llm = Enum.at(llm_spans, 1)
       attrs = OTH.span_attributes(second_llm)
 

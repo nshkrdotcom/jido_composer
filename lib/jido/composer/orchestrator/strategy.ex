@@ -767,9 +767,24 @@ defmodule Jido.Composer.Orchestrator.Strategy do
 
     input_messages =
       case Obs.extract_input_messages(state.conversation) do
-        nil -> [%{role: "user", content: state.query || ""}]
-        [] -> [%{role: "user", content: state.query || ""}]
-        msgs -> msgs
+        nil ->
+          system =
+            if state.system_prompt,
+              do: [%{role: "system", content: state.system_prompt}],
+              else: []
+
+          system ++ [%{role: "user", content: state.query || ""}]
+
+        [] ->
+          system =
+            if state.system_prompt,
+              do: [%{role: "system", content: state.system_prompt}],
+              else: []
+
+          system ++ [%{role: "user", content: state.query || ""}]
+
+        msgs ->
+          msgs
       end
 
     # Append pending tool results that LLMAction will add to the conversation.
