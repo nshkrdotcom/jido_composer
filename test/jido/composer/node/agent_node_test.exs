@@ -321,6 +321,10 @@ defmodule Jido.Composer.Node.AgentNodeTest do
     end
 
     test "still dispatches to run_sync for workflow agents" do
+      # Ensure module is loaded — in production, the strategy's init/2 loads all
+      # node modules before execute_child_sync is ever called. Direct test calls
+      # bypass that path, so we load explicitly.
+      Code.ensure_loaded!(TestWorkflowAgent)
       context = %{extract: %{records: [%{id: 1, source: "test"}], count: 1}}
       result = Node.execute_child_sync(TestWorkflowAgent, %{context: context})
       assert {:ok, _} = result
