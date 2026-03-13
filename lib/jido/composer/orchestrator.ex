@@ -19,13 +19,13 @@ defmodule Jido.Composer.Orchestrator do
       end
 
       agent = MathAssistant.new()
-      {:ok, answer} = MathAssistant.query_sync(agent, "What is (5 + 3) * 2?")
+      {:ok, _agent, answer} = MathAssistant.query_sync(agent, "What is (5 + 3) * 2?")
 
   ## Generated Functions
 
   - `new/0` — Create a new agent instance
   - `query/3` — Start the ReAct loop, returns `{agent, directives}`
-  - `query_sync/3` — Run to completion, returns `{:ok, answer}` or `{:error, reason}`
+  - `query_sync/3` — Run to completion, returns `{:ok, agent, result}`, `{:suspended, agent, suspension}`, or `{:error, reason}`
 
   See the [Orchestrators Guide](orchestrators.md) for all DSL options,
   LLM config, tool approval gates, generation modes, and backpressure.

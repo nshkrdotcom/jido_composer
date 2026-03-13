@@ -86,7 +86,12 @@ defmodule Jido.Composer.Node do
       function_exported?(child_module, :query_sync, 3) ->
         child_agent = child_module.new()
         query = Map.get(context, :query, "")
-        child_module.query_sync(child_agent, query, context)
+
+        case child_module.query_sync(child_agent, query, context) do
+          {:ok, _agent, result} -> {:ok, result}
+          {:suspended, _agent, suspension} -> {:error, {:suspended, suspension}}
+          {:error, reason} -> {:error, reason}
+        end
 
       function_exported?(child_module, :ask_sync, 3) ->
         execute_ai_agent_sync(child_module, context)

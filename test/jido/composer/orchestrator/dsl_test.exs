@@ -120,7 +120,23 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
       # Inject the stub plug into the strategy's req_options
       agent = put_in(agent.state.__strategy__.req_options, plug: plug)
 
-      assert {:ok, "The answer is 42"} = SimpleOrchestrator.query_sync(agent, "What is 42?")
+      assert {:ok, _agent, "The answer is 42"} =
+               SimpleOrchestrator.query_sync(agent, "What is 42?")
+    end
+
+    test "returned agent carries updated strategy state on completion" do
+      plug = LLMStub.setup_req_stub(:dsl_sync_agent_state, [{:final_answer, "The answer is 42"}])
+      agent = SimpleOrchestrator.new()
+      agent = put_in(agent.state.__strategy__.req_options, plug: plug)
+
+      assert {:ok, returned_agent, _result} =
+               SimpleOrchestrator.query_sync(agent, "What is 42?")
+
+      strat = returned_agent.state.__strategy__
+      assert strat.status == :completed
+      assert strat.iteration >= 1
+      assert %ReqLLM.Context{} = strat.conversation
+      assert length(strat.conversation.messages) >= 2
     end
 
     test "returns error on LLM failure" do
@@ -165,7 +181,7 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
       agent = OrchestratorWithWorkflowTool.new()
       agent = put_in(agent.state.__strategy__.req_options, plug: plug)
 
-      assert {:ok, "Workflow ran successfully."} =
+      assert {:ok, _agent, "Workflow ran successfully."} =
                OrchestratorWithWorkflowTool.query_sync(agent, "Run the workflow")
     end
   end
@@ -271,7 +287,7 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
       agent = TerminatingOrchestrator.new()
       agent = put_in(agent.state.__strategy__.req_options, plug: plug)
 
-      assert {:ok, %{summary: "5 + 3 = 8", confidence: 0.99}} =
+      assert {:ok, _agent, %{summary: "5 + 3 = 8", confidence: 0.99}} =
                TerminatingOrchestrator.query_sync(agent, "What is 5+3?")
     end
   end
@@ -321,7 +337,7 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
         system_prompt: "You have gated tools."
     end
 
-    test "query_sync returns suspended error when gated tool is called" do
+    test "query_sync returns suspended when gated tool is called" do
       plug =
         LLMStub.setup_req_stub(:dsl_gated_suspend, [
           {:tool_calls,
@@ -337,10 +353,37 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
       agent = GatedSyncOrchestrator.new()
       agent = put_in(agent.state.__strategy__.req_options, plug: plug)
 
-      assert {:error, {:suspended, suspension}} =
+      assert {:suspended, _agent, suspension} =
                GatedSyncOrchestrator.query_sync(agent, "Echo something")
 
       assert %Jido.Composer.Suspension{reason: :human_input} = suspension
+    end
+
+    test "returned agent carries conversation with tool_use on suspension" do
+      plug =
+        LLMStub.setup_req_stub(:dsl_gated_agent_state, [
+          {:tool_calls,
+           [
+             %{
+               id: "call_1",
+               name: "echo",
+               arguments: %{"message" => "needs approval"}
+             }
+           ]}
+        ])
+
+      agent = GatedSyncOrchestrator.new()
+      agent = put_in(agent.state.__strategy__.req_options, plug: plug)
+
+      assert {:suspended, returned_agent, _suspension} =
+               GatedSyncOrchestrator.query_sync(agent, "Echo something")
+
+      strat = returned_agent.state.__strategy__
+      assert %ReqLLM.Context{} = strat.conversation
+      # The conversation must have messages (system + user + assistant with tool_use)
+      # so that on resume, the tool_result has a matching tool_use
+      assert length(strat.conversation.messages) >= 3
+      assert strat.iteration >= 1
     end
   end
 
@@ -356,7 +399,7 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
         system_prompt: "You have a suspend tool."
     end
 
-    test "query_sync returns suspended error when action returns :suspend" do
+    test "query_sync returns suspended when action returns :suspend" do
       plug =
         LLMStub.setup_req_stub(:dsl_suspend, [
           {:tool_calls,
@@ -372,7 +415,7 @@ defmodule Jido.Composer.Orchestrator.DSLTest do
       agent = SuspendOrchestrator.new()
       agent = put_in(agent.state.__strategy__.req_options, plug: plug)
 
-      assert {:error, {:suspended, suspension}} =
+      assert {:suspended, _agent, suspension} =
                SuspendOrchestrator.query_sync(agent, "Please suspend")
 
       assert %Jido.Composer.Suspension{} = suspension

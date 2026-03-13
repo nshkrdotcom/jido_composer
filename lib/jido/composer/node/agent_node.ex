@@ -91,7 +91,8 @@ defmodule Jido.Composer.Node.AgentNode do
         query = Map.get(context, :query, Map.get(context, "query", ""))
 
         case mod.query_sync(agent, query, context) do
-          {:ok, result} -> {:ok, %{result: result}}
+          {:ok, _agent, result} -> {:ok, %{result: result}}
+          {:suspended, _agent, suspension} -> {:error, {:suspended, suspension}}
           {:error, reason} -> {:error, reason}
         end
 

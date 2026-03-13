@@ -192,7 +192,7 @@ defmodule MathAssistant do
 end
 
 agent = MathAssistant.new()
-{:ok, answer} = MathAssistant.query_sync(agent, "What is 5 + 3?")
+{:ok, _agent, answer} = MathAssistant.query_sync(agent, "What is 5 + 3?")
 ```
 
 ## Composer vs Jido AI

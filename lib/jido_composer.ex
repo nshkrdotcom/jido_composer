@@ -40,7 +40,7 @@ defmodule Jido.Composer do
       end
 
       agent = MyAssistant.new()
-      {:ok, answer} = MyAssistant.query_sync(agent, "Summarize recent news")
+      {:ok, _agent, answer} = MyAssistant.query_sync(agent, "Summarize recent news")
 
   ## Quick Start — Composition
 

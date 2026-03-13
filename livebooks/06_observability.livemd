@@ -260,7 +260,7 @@ IO.puts("Analysis Orchestrator defined with ETL workflow as AgentNode tool.")
 ```elixir
 agent = Demo.AnalysisOrchestrator.new()
 
-{:ok, answer} =
+{:ok, _agent, answer} =
   Demo.AnalysisOrchestrator.query_sync(
     agent,
     "Validate the quarterly report documents, then run the ETL pipeline to process them."

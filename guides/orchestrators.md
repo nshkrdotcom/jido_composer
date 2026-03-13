@@ -1,6 +1,7 @@
 # Orchestrators
 
-Orchestrators use an LLM to dynamically compose available tools (actions and agents) at runtime via a ReAct-style loop.
+Orchestrators use an LLM to dynamically compose available tools (actions and
+agents) at runtime via a ReAct-style loop.
 
 ## ReAct Loop
 
@@ -15,7 +16,10 @@ flowchart TD
     C -->|Max iterations| G[Return error]
 ```
 
-The orchestrator sends the user's query to the LLM along with available tool definitions. The LLM either calls tools or provides a final answer. Tool results are fed back to the LLM for further reasoning. This repeats until the LLM responds with a final answer or the iteration limit is reached.
+The orchestrator sends the user's query to the LLM along with available tool
+definitions. The LLM either calls tools or provides a final answer. Tool results
+are fed back to the LLM for further reasoning. This repeats until the LLM
+responds with a final answer or the iteration limit is reached.
 
 ## DSL Options
 
@@ -41,7 +45,8 @@ The orchestrator sends the user's query to the LLM along with available tool def
 
 ## Model Format
 
-Models use the `"provider:model_name"` format supported by [req_llm](https://hexdocs.pm/req_llm):
+Models use the `"provider:model_name"` format supported by
+[req_llm](https://hexdocs.pm/req_llm):
 
 ```elixir
 model: "anthropic:claude-sonnet-4-20250514"
@@ -51,9 +56,14 @@ model: "google:gemini-2.0-flash"
 
 ## Tools
 
-Actions and agents listed in `nodes` are automatically converted to LLM tool definitions. The tool name comes from the action's `name/0` callback, the description from `description/0`, and parameters from `schema/0`.
+Actions and agents listed in `nodes` are automatically converted to LLM tool
+definitions. The tool name comes from the action's `name/0` callback, the
+description from `description/0`, and parameters from `schema/0`.
 
-> **Tip:** Write clear, specific `description` strings for your tools — the LLM uses them to decide which tool to call. A vague description like "process data" leads to poor tool selection. Prefer "Search the product catalog by name or SKU and return matching items with prices."
+> **Tip:** Write clear, specific `description` strings for your tools — the LLM
+> uses them to decide which tool to call. A vague description like "process
+> data" leads to poor tool selection. Prefer "Search the product catalog by name
+> or SKU and return matching items with prices."
 
 ```elixir
 use Jido.Composer.Orchestrator,
@@ -73,13 +83,17 @@ When the LLM calls a tool, the orchestrator:
 
 ## Streaming
 
-When `stream: true`, LLMAction uses streaming generation internally (collect-then-return). The strategy sees no difference from non-streaming mode.
+When `stream: true`, LLMAction uses streaming generation internally
+(collect-then-return). The strategy sees no difference from non-streaming mode.
 
-> **Note:** Streaming uses Finch directly, bypassing Req plugs. When using cassette/stub testing, set `stream: false` (the default).
+> **Note:** Streaming uses Finch directly, bypassing Req plugs. When using
+> cassette/stub testing, set `stream: false` (the default).
 
 ## Termination Tool (Structured Output)
 
-For structured output, define a `Jido.Action` module whose schema describes the output shape, and pass it as `termination_tool:`. The LLM sees it as a regular tool and calls it when ready to produce the final answer.
+For structured output, define a `Jido.Action` module whose schema describes the
+output shape, and pass it as `termination_tool:`. The LLM sees it as a regular
+tool and calls it when ready to produce the final answer.
 
 ```elixir
 defmodule FinalReportAction do
@@ -105,12 +119,15 @@ defmodule Analyzer do
     system_prompt: "Analyze the query. Call final_report when you have the answer."
 end
 
-{:ok, %{summary: _, confidence: _}} = Analyzer.query_sync(agent, "Analyze X")
+{:ok, _agent, %{summary: _, confidence: _}} = Analyzer.query_sync(agent, "Analyze X")
 ```
 
-The termination tool action's `run/2` executes with the LLM's arguments, allowing validation and transformation. If the action returns an error, the error is fed back to the LLM so it can retry with corrected arguments.
+The termination tool action's `run/2` executes with the LLM's arguments,
+allowing validation and transformation. If the action returns an error, the
+error is fed back to the LLM so it can retry with corrected arguments.
 
-When the LLM returns both regular tools and the termination tool in the same batch, termination wins and sibling calls are dropped.
+When the LLM returns both regular tools and the termination tool in the same
+batch, termination wins and sibling calls are dropped.
 
 ## Running Orchestrators
 
@@ -125,17 +142,30 @@ agent = MyOrchestrator.new()
 
 ### Blocking (`query_sync/3`)
 
-Executes the full ReAct loop internally:
+Executes the full ReAct loop internally and returns the post-execution agent:
 
 ```elixir
 agent = MyOrchestrator.new()
-{:ok, answer} = MyOrchestrator.query_sync(agent, "What is 5 + 3?")
+{:ok, agent, answer} = MyOrchestrator.query_sync(agent, "What is 5 + 3?")
 ```
+
+`query_sync` returns three variants:
+
+| Return                            | Meaning                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `{:ok, agent, result}`            | Completed — `result` is the LLM's final answer (string or structured map) |
+| `{:suspended, agent, suspension}` | Paused — a tool requires human approval or an action suspended            |
+| `{:error, reason}`                | Failed — LLM error, iteration limit, etc.                                 |
+
+The returned `agent` carries the full post-execution strategy state:
+conversation history, token usage, iteration count, and tool call results. This
+enables [multi-turn persistence](#multi-turn-conversation-persistence) and
+[suspension handling](#handling-suspension).
 
 Both accept an optional context map as a third argument:
 
 ```elixir
-{:ok, answer} = MyOrchestrator.query_sync(agent, "Analyze this", %{data: dataset})
+{:ok, agent, answer} = MyOrchestrator.query_sync(agent, "Analyze this", %{data: dataset})
 ```
 
 ## Tool Approval Gates
@@ -158,11 +188,45 @@ When the LLM calls a gated tool, the orchestrator:
 3. Suspends with an `ApprovalRequest` for each gated tool
 4. Waits for human approval before executing
 
+### Handling Suspension
+
+When the LLM calls a gated tool, `query_sync` returns
+`{:suspended, agent, suspension}` instead of an error. The returned agent
+contains the full conversation history — including the LLM's `tool_use` message
+— which is essential for correct resumption:
+
+```elixir
+case MyOrchestrator.query_sync(agent, "Deploy the new version") do
+  {:ok, agent, answer} ->
+    # Normal completion
+    answer
+
+  {:suspended, agent, suspension} ->
+    # Persist the agent's conversation so we can resume later
+    strat = agent.state.__strategy__
+    MyDB.save_conversation(session_id, strat.conversation)
+
+    # Present the approval request to a human
+    %{reason: :human_input, approval_request: request} = suspension
+    send_to_reviewer(request)
+
+  {:error, reason} ->
+    handle_error(reason)
+end
+```
+
+Without the returned agent, the conversation would be lost on suspension. When
+the user later approves and the agent resumes, it needs the `tool_use` message
+in history — otherwise the API rejects the `tool_result` as orphaned.
+
+See the [HITL guide](hitl.md) for resume flows and persistence tiers.
+
 ### Rejection Policy
 
 Controls behavior when a gated tool call is rejected:
 
-- `:continue_siblings` (default) — Continue executing other (ungated) tool calls; skip the rejected one
+- `:continue_siblings` (default) — Continue executing other (ungated) tool
+  calls; skip the rejected one
 
 ## Backpressure
 
@@ -173,13 +237,18 @@ use Jido.Composer.Orchestrator,
   max_tool_concurrency: 3  # max 3 tools executing at once
 ```
 
-When the LLM requests more tool calls than the concurrency limit, excess calls are queued and executed as slots become available.
+When the LLM requests more tool calls than the concurrency limit, excess calls
+are queued and executed as slots become available.
 
-> Orchestrators sit at the **adaptive** end of the control spectrum — the LLM decides which tools to call and in what order. For fully deterministic pipelines, see [Workflows](workflows.md). For mixing both patterns, see [Composition & Nesting](composition.md).
+> Orchestrators sit at the **adaptive** end of the control spectrum — the LLM
+> decides which tools to call and in what order. For fully deterministic
+> pipelines, see [Workflows](workflows.md). For mixing both patterns, see
+> [Composition & Nesting](composition.md).
 
 ## Runtime Configuration
 
-The DSL sets defaults at compile time, but `configure/2` lets you override fields at runtime — after `new/0` but before `query_sync/3`:
+The DSL sets defaults at compile time, but `configure/2` lets you override
+fields at runtime — after `new/0` but before `query_sync/3`:
 
 ```elixir
 agent = MathAssistant.new()
@@ -192,7 +261,7 @@ agent = MathAssistant.configure(agent,
   req_options: [plug: cassette_plug]
 )
 
-{:ok, answer} = MathAssistant.query_sync(agent, "What is 5 + 3?")
+{:ok, _agent, answer} = MathAssistant.query_sync(agent, "What is 5 + 3?")
 ```
 
 ### Overridable Fields
@@ -209,7 +278,8 @@ agent = MathAssistant.configure(agent,
 
 ### Filtering Tools (RBAC)
 
-Use `get_action_modules/1` to read the DSL-declared tools, filter them, then set them back:
+Use `get_action_modules/1` to read the DSL-declared tools, filter them, then set
+them back:
 
 ```elixir
 agent = MyOrchestrator.new()
@@ -226,7 +296,10 @@ end)
 agent = MyOrchestrator.configure(agent, nodes: visible)
 ```
 
-When `:nodes` is overridden, `configure/2` rebuilds `ActionNode`/`AgentNode` structs, `ReqLLM.Tool` descriptions, and internal lookup maps. If a `termination_tool` was declared in the DSL, it is automatically deduplicated — you don't need to exclude it from the node list.
+When `:nodes` is overridden, `configure/2` rebuilds `ActionNode`/`AgentNode`
+structs, `ReqLLM.Tool` descriptions, and internal lookup maps. If a
+`termination_tool` was declared in the DSL, it is automatically deduplicated —
+you don't need to exclude it from the node list.
 
 ### Pre-loading Conversation History
 
@@ -239,14 +312,47 @@ context = ReqLLM.Context.new(messages)
 
 agent = MyOrchestrator.new()
 agent = MyOrchestrator.configure(agent, conversation: context)
-{:ok, answer} = MyOrchestrator.query_sync(agent, new_user_message)
+{:ok, agent, answer} = MyOrchestrator.query_sync(agent, new_user_message)
+```
+
+### Multi-Turn Conversation Persistence
+
+`query_sync` returns the updated agent, which carries the full conversation
+history in its strategy state. Use this to persist conversations between turns:
+
+```elixir
+# First turn — no prior history
+agent = MyOrchestrator.new()
+{:ok, agent, answer} = MyOrchestrator.query_sync(agent, "What is 5 + 3?")
+
+# Extract and persist the conversation
+conversation = agent.state.__strategy__.conversation
+MyDB.save_conversation(session_id, ReqLLM.Context.to_list(conversation))
+
+# Later turn — reload history and continue
+messages = MyDB.load_messages(session_id)
+agent = MyOrchestrator.new()
+agent = MyOrchestrator.configure(agent, conversation: ReqLLM.Context.new(messages))
+{:ok, agent, answer} = MyOrchestrator.query_sync(agent, "And what is that times 2?")
+
+# The LLM sees the full prior conversation and can reference earlier results
+```
+
+The strategy state also exposes post-execution metadata:
+
+```elixir
+strat = agent.state.__strategy__
+strat.conversation  # ReqLLM.Context — full message history
+strat.iteration     # number of ReAct loop iterations used
+strat.status        # :completed, :error, etc.
 ```
 
 > See `Jido.Composer.Orchestrator.Configure` for the full API reference.
 
 ## Context Accumulation
 
-Tool results are scoped under the tool name in the working context, just like workflow states:
+Tool results are scoped under the tool name in the working context, just like
+workflow states:
 
 ```elixir
 # After LLM calls "search" and "calculate" tools:
@@ -287,5 +393,5 @@ defmodule MathAssistant do
 end
 
 agent = MathAssistant.new()
-{:ok, answer} = MathAssistant.query_sync(agent, "What is (5 + 3) * 2?")
+{:ok, _agent, answer} = MathAssistant.query_sync(agent, "What is (5 + 3) * 2?")
 ```

@@ -38,7 +38,7 @@ import ReqCassette
 test "orchestrator handles query" do
   with_cassette("my_test", CassetteHelper.default_cassette_opts(), fn plug ->
     agent = MyOrchestrator.new()
-    {:ok, answer} = MyOrchestrator.query_sync(
+    {:ok, _agent, answer} = MyOrchestrator.query_sync(
       agent,
       "test query",
       %{},

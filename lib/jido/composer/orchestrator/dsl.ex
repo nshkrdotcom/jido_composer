@@ -96,8 +96,20 @@ defmodule Jido.Composer.Orchestrator.DSL do
         __MODULE__.cmd(agent, {:orchestrator_start, Map.put(context, :query, query)})
       end
 
-      @doc "Runs the orchestrator synchronously, blocking until final answer."
-      @spec query_sync(Jido.Agent.t(), String.t(), map()) :: {:ok, String.t()} | {:error, term()}
+      @doc """
+      Runs the orchestrator synchronously, blocking until final answer.
+
+      Returns the post-execution agent in all non-error outcomes, enabling
+      conversation persistence and post-execution inspection of strategy state.
+
+      - `{:ok, agent, result}` — completed; `result` is the LLM's final answer or termination tool output
+      - `{:suspended, agent, suspension}` — paused for human approval or action-level suspend
+      - `{:error, reason}` — failed (LLM error, iteration limit, etc.)
+      """
+      @spec query_sync(Jido.Agent.t(), String.t(), map()) ::
+              {:ok, Jido.Agent.t(), term()}
+              | {:suspended, Jido.Agent.t(), Jido.Composer.Suspension.t()}
+              | {:error, term()}
       def query_sync(%Jido.Agent{} = agent, query, context \\ %{}) when is_binary(query) do
         {agent, directives} = query(agent, query, context)
         Jido.Composer.Orchestrator.DSL.__query_sync_loop__(__MODULE__, agent, directives)
@@ -141,14 +153,17 @@ defmodule Jido.Composer.Orchestrator.DSL do
   @doc false
   def __query_sync_loop__(module, agent, directives) do
     case run_orch_directives(module, agent, directives) do
-      {:ok, result} ->
-        {:ok, result}
+      {:ok, agent, result} ->
+        {:ok, agent, result}
 
       {:error, reason} ->
         {:error, reason}
 
-      {:suspend, _agent, directive} ->
-        {:error, {:suspended, directive.suspension}}
+      {:suspended, agent, suspension} ->
+        {:suspended, agent, suspension}
+
+      {:suspend, agent, directive} ->
+        {:suspended, agent, directive.suspension}
     end
   end
 
@@ -157,7 +172,7 @@ defmodule Jido.Composer.Orchestrator.DSL do
 
     case strat.status do
       :completed ->
-        {:ok, unwrap_result(strat.result)}
+        {:ok, agent, unwrap_result(strat.result)}
 
       :error ->
         {:error, strat.result}
@@ -179,7 +194,13 @@ defmodule Jido.Composer.Orchestrator.DSL do
                 nil
             end
 
-        {:error, {:suspended, suspension}}
+        case suspension do
+          %Jido.Composer.Suspension{} = s ->
+            {:suspended, agent, s}
+
+          nil ->
+            {:error, {:unexpected_suspension_state, strat.status}}
+        end
 
       _ ->
         {:error, :unexpected_state}

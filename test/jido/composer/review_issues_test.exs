@@ -71,7 +71,7 @@ defmodule Jido.Composer.ReviewIssuesTest do
       agent = put_in(agent.state.__strategy__.req_options, plug: plug)
 
       # This should NOT crash with CaseClauseError
-      assert {:ok, "Validation result: retry needed"} =
+      assert {:ok, _agent, "Validation result: retry needed"} =
                OutcomeOrchestrator.query_sync(agent, "Validate data")
     end
   end
@@ -293,7 +293,7 @@ defmodule Jido.Composer.ReviewIssuesTest do
       agent = Issue10Orchestrator.new()
       agent = put_in(agent.state.__strategy__.req_options, plug: plug)
 
-      assert {:ok, "done"} = Issue10Orchestrator.query_sync(agent, "test")
+      assert {:ok, _agent, "done"} = Issue10Orchestrator.query_sync(agent, "test")
     end
   end
 

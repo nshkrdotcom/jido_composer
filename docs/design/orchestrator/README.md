@@ -140,14 +140,14 @@ for the full approval flow.
 
 ### Generated Functions
 
-| Function                            | Returns                               | Behaviour                                                                                                             |
-| ----------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `new(opts)`                         | agent struct                          | Creates an orchestrator agent instance with strategy state initialized                                                |
-| `query(agent, query, context)`      | `{agent, directives}`                 | Sends a query with context, returns directives for the runtime to execute the ReAct loop                              |
-| `query_sync(agent, query, context)` | `{:ok, result}` \| `{:error, reason}` | Sends a query and blocks until the LLM produces a final answer. Intended for testing — not for use inside AgentServer |
-| `configure(agent, overrides)`       | agent struct                          | Applies runtime overrides to strategy state before query. See [Runtime Configuration](#runtime-configuration)         |
-| `get_action_modules(agent)`         | `[module()]`                          | Returns the action/agent modules currently configured as nodes                                                        |
-| `get_termination_module(agent)`     | `module() \| nil`                     | Returns the termination tool module, or nil                                                                           |
+| Function                            | Returns                                                                           | Behaviour                                                                                                             |
+| ----------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `new(opts)`                         | agent struct                                                                      | Creates an orchestrator agent instance with strategy state initialized                                                |
+| `query(agent, query, context)`      | `{agent, directives}`                                                             | Sends a query with context, returns directives for the runtime to execute the ReAct loop                              |
+| `query_sync(agent, query, context)` | `{:ok, agent, result}` \| `{:suspended, agent, suspension}` \| `{:error, reason}` | Sends a query and blocks until the LLM produces a final answer. Intended for testing — not for use inside AgentServer |
+| `configure(agent, overrides)`       | agent struct                                                                      | Applies runtime overrides to strategy state before query. See [Runtime Configuration](#runtime-configuration)         |
+| `get_action_modules(agent)`         | `[module()]`                                                                      | Returns the action/agent modules currently configured as nodes                                                        |
+| `get_termination_module(agent)`     | `module() \| nil`                                                                 | Returns the termination tool module, or nil                                                                           |
 
 ## Runtime Configuration
 
@@ -171,7 +171,7 @@ agent = MyOrchestrator.configure(agent,
   conversation: preloaded_context
 )
 
-{:ok, result} = MyOrchestrator.query_sync(agent, user_message, ambient)
+{:ok, _agent, result} = MyOrchestrator.query_sync(agent, user_message, ambient)
 ```
 
 ### Overridable Fields

@@ -25,7 +25,7 @@ defmodule Jido.Composer.Orchestrator.Configure do
         conversation: preloaded_context
       )
 
-      {:ok, result} = MyOrchestrator.query_sync(agent, user_message, ambient)
+      {:ok, _agent, result} = MyOrchestrator.query_sync(agent, user_message, ambient)
 
   ## Read-Filter-Write Pattern
 

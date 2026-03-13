@@ -237,7 +237,7 @@ defmodule Jido.Composer.Orchestrator.ConfigureTest do
           req_options: [plug: plug]
         )
 
-      assert {:ok, "done"} = ConfigOrchestrator.query_sync(agent, "Help me")
+      assert {:ok, _agent, "done"} = ConfigOrchestrator.query_sync(agent, "Help me")
     end
 
     test "nodes override works with query_sync" do
@@ -256,7 +256,7 @@ defmodule Jido.Composer.Orchestrator.ConfigureTest do
           req_options: [plug: plug]
         )
 
-      assert {:ok, "3 * 4 = 12"} = ConfigOrchestrator.query_sync(agent, "Multiply 3 by 4")
+      assert {:ok, _agent, "3 * 4 = 12"} = ConfigOrchestrator.query_sync(agent, "Multiply 3 by 4")
     end
 
     test "model override works with query_sync" do
@@ -269,7 +269,7 @@ defmodule Jido.Composer.Orchestrator.ConfigureTest do
           req_options: [plug: plug]
         )
 
-      assert {:ok, "deep answer"} = ConfigOrchestrator.query_sync(agent, "Think deeply")
+      assert {:ok, _agent, "deep answer"} = ConfigOrchestrator.query_sync(agent, "Think deeply")
     end
 
     test "conversation pre-load works with query_sync" do
@@ -288,7 +288,7 @@ defmodule Jido.Composer.Orchestrator.ConfigureTest do
           req_options: [plug: plug]
         )
 
-      assert {:ok, "continued"} = ConfigOrchestrator.query_sync(agent, "And 3+3?")
+      assert {:ok, _agent, "continued"} = ConfigOrchestrator.query_sync(agent, "And 3+3?")
     end
 
     test "read-filter-write pattern for RBAC" do
@@ -322,7 +322,7 @@ defmodule Jido.Composer.Orchestrator.ConfigureTest do
       refute "echo" in tool_names
       assert "add" in tool_names
 
-      assert {:ok, "filtered result"} = ConfigOrchestrator.query_sync(agent, "Add 1+2")
+      assert {:ok, _agent, "filtered result"} = ConfigOrchestrator.query_sync(agent, "Add 1+2")
     end
   end
 end

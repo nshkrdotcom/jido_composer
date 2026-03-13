@@ -185,7 +185,7 @@ defmodule Demo.MathAssistant do
 end
 
 agent = Demo.MathAssistant.new()
-{:ok, answer} = Demo.MathAssistant.query_sync(agent, "What is 5 + 3?")
+{:ok, _agent, answer} = Demo.MathAssistant.query_sync(agent, "What is 5 + 3?")
 
 IO.puts("=== Basic Orchestrator ===")
 IO.puts("Query:  What is 5 + 3?")
@@ -263,7 +263,7 @@ end
 
 agent = Demo.DataAssistant.new()
 
-{:ok, answer} =
+{:ok, _agent, answer} =
   Demo.DataAssistant.query_sync(
     agent,
     "Run the ETL pipeline on the orders database and tell me what happened."
@@ -437,7 +437,7 @@ defmodule Demo.StructuredMathAssistant do
 end
 
 agent = Demo.StructuredMathAssistant.new()
-{:ok, result} = Demo.StructuredMathAssistant.query_sync(agent, "What is (5 + 3) * 2?")
+{:ok, _agent, result} = Demo.StructuredMathAssistant.query_sync(agent, "What is (5 + 3) * 2?")
 
 IO.puts("=== Termination Tool (Structured Output) ===")
 IO.puts("Query:  What is (5 + 3) * 2?")

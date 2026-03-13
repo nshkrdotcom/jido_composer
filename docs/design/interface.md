@@ -131,14 +131,14 @@ use Jido.Composer.Orchestrator,
 
 ### Generated Functions
 
-| Function                            | Returns                               | Purpose                                                                                |
-| ----------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------- |
-| `new(opts)`                         | agent struct                          | Create an orchestrator agent instance with initialized strategy state                  |
-| `query(agent, query, context)`      | `{agent, directives}`                 | Send a query with context (async — returns directives for the runtime to execute)      |
-| `query_sync(agent, query, context)` | `{:ok, result}` \| `{:error, reason}` | Send a query and block until the LLM produces a final answer (convenience for testing) |
-| `configure(agent, overrides)`       | agent struct                          | Apply runtime overrides (system_prompt, nodes, model, etc.) before query               |
-| `get_action_modules(agent)`         | `[module()]`                          | Read the currently configured node modules                                             |
-| `get_termination_module(agent)`     | `module() \| nil`                     | Read the termination tool module                                                       |
+| Function                            | Returns                                                                           | Purpose                                                                                |
+| ----------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `new(opts)`                         | agent struct                                                                      | Create an orchestrator agent instance with initialized strategy state                  |
+| `query(agent, query, context)`      | `{agent, directives}`                                                             | Send a query with context (async — returns directives for the runtime to execute)      |
+| `query_sync(agent, query, context)` | `{:ok, agent, result}` \| `{:suspended, agent, suspension}` \| `{:error, reason}` | Send a query and block until the LLM produces a final answer (convenience for testing) |
+| `configure(agent, overrides)`       | agent struct                                                                      | Apply runtime overrides (system_prompt, nodes, model, etc.) before query               |
+| `get_action_modules(agent)`         | `[module()]`                                                                      | Read the currently configured node modules                                             |
+| `get_termination_module(agent)`     | `module() \| nil`                                                                 | Read the termination tool module                                                       |
 
 ## Mutual Composability
 
