@@ -162,7 +162,9 @@ defmodule Jido.Composer.Orchestrator.DSL do
       {:suspended, agent, suspension} ->
         {:suspended, agent, suspension}
 
-      {:suspend, agent, directive} ->
+      {:suspend, agent, directive, unconsumed} ->
+        unconsumed_ids = extract_unconsumed_call_ids(unconsumed)
+        agent = cleanup_orphaned_pending(agent, unconsumed_ids)
         {:suspended, agent, directive.suspension}
     end
   end
@@ -237,7 +239,7 @@ defmodule Jido.Composer.Orchestrator.DSL do
         run_orch_directives(module, agent, new_directives ++ rest)
 
       %Jido.Composer.Directive.Suspend{} = suspend ->
-        {:suspend, agent, suspend}
+        {:suspend, agent, suspend, rest}
 
       _other ->
         run_orch_directives(module, agent, rest)
@@ -253,6 +255,34 @@ defmodule Jido.Composer.Orchestrator.DSL do
       {:ok, result, outcome} -> %{status: :ok, result: result, outcome: outcome}
       {:error, reason} -> %{status: :error, result: %{error: reason}}
     end
+  end
+
+  defp extract_unconsumed_call_ids(directives) do
+    Enum.flat_map(directives, fn
+      %Jido.Agent.Directive.RunInstruction{meta: %{call_id: id}} when is_binary(id) -> [id]
+      %Jido.Agent.Directive.SpawnAgent{tag: {:tool_call, id, _}} when is_binary(id) -> [id]
+      _ -> []
+    end)
+  end
+
+  defp cleanup_orphaned_pending(agent, []), do: agent
+
+  defp cleanup_orphaned_pending(agent, orphaned_ids) do
+    alias Jido.Agent.Strategy.State, as: StratState
+
+    StratState.update(agent, fn s ->
+      cleaned = Enum.reject(s.tool_concurrency.pending, &(&1 in orphaned_ids))
+      new_tc = %{s.tool_concurrency | pending: cleaned}
+
+      new_status =
+        Jido.Composer.Orchestrator.StatusComputer.compute(
+          new_tc,
+          s.approval_gate,
+          s.suspended_calls
+        )
+
+      %{s | tool_concurrency: new_tc, status: new_status}
+    end)
   end
 
   defp get_node_name(mod) do

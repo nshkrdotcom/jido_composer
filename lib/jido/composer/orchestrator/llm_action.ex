@@ -59,15 +59,56 @@ defmodule Jido.Composer.Orchestrator.LLMAction do
   end
 
   defp build_context(%ReqLLM.Context{} = context, [], _params) do
-    context
+    pad_orphaned_tool_results(context)
   end
 
   defp build_context(%ReqLLM.Context{} = context, tool_results, _params) do
-    Enum.reduce(tool_results, context, fn tr, ctx ->
-      content = Jason.encode!(tr.result)
-      msg = ReqLLM.Context.tool_result(tr.id, tr.name, content)
-      ReqLLM.Context.append(ctx, msg)
+    context
+    |> then(fn ctx ->
+      Enum.reduce(tool_results, ctx, fn tr, c ->
+        content = Jason.encode!(tr.result)
+        ReqLLM.Context.append(c, ReqLLM.Context.tool_result(tr.id, tr.name, content))
+      end)
     end)
+    |> pad_orphaned_tool_results()
+  end
+
+  # Pads any tool_use IDs that lack a matching tool_result with a "not_executed" message.
+  # This ensures the LLM API contract is satisfied at call time without storing
+  # synthetic results in the persisted conversation.
+  defp pad_orphaned_tool_results(%ReqLLM.Context{} = context) do
+    all_use_ids = extract_tool_use_ids(context)
+    existing_result_ids = extract_tool_result_ids(context)
+    orphaned = MapSet.difference(all_use_ids, existing_result_ids)
+
+    Enum.reduce(orphaned, context, fn id, ctx ->
+      content =
+        Jason.encode!(%{
+          status: "not_executed",
+          message: "Tool was not executed due to sibling tool suspension"
+        })
+
+      ReqLLM.Context.append(ctx, ReqLLM.Context.tool_result(id, nil, content))
+    end)
+  end
+
+  defp extract_tool_use_ids(%ReqLLM.Context{messages: messages}) do
+    messages
+    |> Enum.filter(&(&1.role == :assistant))
+    |> Enum.flat_map(fn msg ->
+      (msg.tool_calls || [])
+      |> Enum.map(& &1.id)
+      |> Enum.reject(&is_nil/1)
+    end)
+    |> MapSet.new()
+  end
+
+  defp extract_tool_result_ids(%ReqLLM.Context{messages: messages}) do
+    messages
+    |> Enum.filter(&(&1.role == :tool))
+    |> Enum.map(& &1.tool_call_id)
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
   end
 
   # -- Option building --

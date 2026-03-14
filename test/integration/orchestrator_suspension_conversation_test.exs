@@ -1,15 +1,12 @@
 defmodule Jido.Composer.Integration.OrchestratorSuspensionConversationTest do
   @moduledoc """
-  Tests for the conversation integrity invariant on tool suspension.
+  Tests for the refactored suspension conversation model.
 
-  After any orchestrator state transition (completion, suspension, error), the
-  conversation in `state.conversation` must satisfy the LLM API contract: every
-  `tool_use` in an assistant message must have a corresponding `tool_result`
-  in the immediately following messages.
-
-  These tests exercise the two root causes:
-  1. Completed sibling tool results not flushed to conversation on suspension
-  2. Sibling tool directives dropped by early SuspendDirective return
+  Key invariants:
+  1. Conversation stores only REAL tool_results — no synthetics at suspension time
+  2. Orphaned pending tool IDs are cleaned up by the DSL on suspend
+  3. Padding for orphaned tool_use IDs happens at LLM-call time (in LLMAction)
+  4. Resume produces exactly one tool_result per tool_use_id — no duplicates
   """
   use ExUnit.Case, async: true
 
@@ -29,47 +26,31 @@ defmodule Jido.Composer.Integration.OrchestratorSuspensionConversationTest do
       system_prompt: "You are a test assistant with add, echo, and suspend tools."
   end
 
-  # -- Conversation invariant helpers --
+  # -- Helpers --
 
-  defp find_orphaned_tool_use_ids(%ReqLLM.Context{messages: messages}) do
-    tool_use_ids =
-      messages
-      |> Enum.filter(&(&1.role == :assistant))
-      |> Enum.flat_map(fn msg ->
-        (msg.tool_calls || [])
-        |> Enum.map(fn tc -> tc.id end)
-        |> Enum.reject(&is_nil/1)
-      end)
-      |> MapSet.new()
-
-    tool_result_ids =
-      messages
-      |> Enum.filter(&(&1.role == :tool))
-      |> Enum.map(& &1.tool_call_id)
-      |> Enum.reject(&is_nil/1)
-      |> MapSet.new()
-
-    MapSet.difference(tool_use_ids, tool_result_ids)
-  end
-
-  defp assert_conversation_integrity!(%ReqLLM.Context{} = conversation) do
-    orphaned = find_orphaned_tool_use_ids(conversation)
-
-    assert MapSet.size(orphaned) == 0,
-           "Conversation has tool_use IDs without matching tool_result: " <>
-             inspect(MapSet.to_list(orphaned))
-  end
-
-  defp find_tool_result(%ReqLLM.Context{messages: messages}, tool_call_id) do
-    Enum.find(messages, fn msg ->
+  defp find_tool_results(%ReqLLM.Context{messages: messages}, tool_call_id) do
+    Enum.filter(messages, fn msg ->
       msg.role == :tool and msg.tool_call_id == tool_call_id
     end)
   end
 
+  defp count_tool_results(%ReqLLM.Context{messages: messages}, tool_call_id) do
+    Enum.count(messages, fn msg ->
+      msg.role == :tool and msg.tool_call_id == tool_call_id
+    end)
+  end
+
+  defp all_tool_result_ids(%ReqLLM.Context{messages: messages}) do
+    messages
+    |> Enum.filter(&(&1.role == :tool))
+    |> Enum.map(& &1.tool_call_id)
+    |> Enum.reject(&is_nil/1)
+  end
+
   # -- Tests --
 
-  describe "single tool suspension" do
-    test "suspend tool has matching tool_result in conversation" do
+  describe "single tool suspension — no synthetic in conversation" do
+    test "conversation has NO tool_result for suspended call" do
       plug =
         LLMStub.setup_req_stub(:single_suspend, [
           {:tool_calls,
@@ -84,12 +65,17 @@ defmodule Jido.Composer.Integration.OrchestratorSuspensionConversationTest do
 
       strat = returned_agent.state.__strategy__
       assert %ReqLLM.Context{} = strat.conversation
-      assert_conversation_integrity!(strat.conversation)
+
+      # No tool_result in conversation for the suspended call
+      assert find_tool_results(strat.conversation, "call_suspend_1") == []
+
+      # Pending should be clean
+      assert strat.tool_concurrency.pending == []
     end
   end
 
-  describe "multi-tool with suspension (completed sibling)" do
-    test "completed add result is flushed to conversation when suspend fires" do
+  describe "multi-tool (add completes, suspend fires)" do
+    test "completed result stays in tool_concurrency, not conversation" do
       plug =
         LLMStub.setup_req_stub(:multi_tool_suspend, [
           {:tool_calls,
@@ -107,16 +93,21 @@ defmodule Jido.Composer.Integration.OrchestratorSuspensionConversationTest do
 
       strat = returned_agent.state.__strategy__
       assert %ReqLLM.Context{} = strat.conversation
-      assert_conversation_integrity!(strat.conversation)
 
-      # The completed add tool's real result must be present
-      assert find_tool_result(strat.conversation, "call_add_1") != nil,
-             "Completed sibling tool (add) should have its result flushed to conversation"
+      # No tool_result in conversation for either call
+      assert find_tool_results(strat.conversation, "call_add_1") == []
+      assert find_tool_results(strat.conversation, "call_suspend_1") == []
+
+      # Completed result is in tool_concurrency
+      assert Enum.any?(strat.tool_concurrency.completed, &(&1.id == "call_add_1"))
+
+      # Pending is clean
+      assert strat.tool_concurrency.pending == []
     end
   end
 
-  describe "multi-tool with early suspension (unexecuted sibling)" do
-    test "suspend first, sibling add never dispatched - both have tool_results" do
+  describe "suspend first, sibling never dispatched" do
+    test "orphaned pending cleaned, no synthetics in conversation" do
       plug =
         LLMStub.setup_req_stub(:early_suspend, [
           {:tool_calls,
@@ -134,16 +125,17 @@ defmodule Jido.Composer.Integration.OrchestratorSuspensionConversationTest do
 
       strat = returned_agent.state.__strategy__
       assert %ReqLLM.Context{} = strat.conversation
-      assert_conversation_integrity!(strat.conversation)
 
-      # The unexecuted add tool should have a synthetic result
-      assert find_tool_result(strat.conversation, "call_add_1") != nil,
-             "Unexecuted sibling tool (add) should have a synthetic tool_result"
+      # No tool_results in conversation
+      assert all_tool_result_ids(strat.conversation) == []
+
+      # Orphaned add should NOT be in pending
+      refute "call_add_1" in strat.tool_concurrency.pending
     end
   end
 
-  describe "three tools with middle suspension" do
-    test "echo completes, suspend fires, add never dispatched - all accounted for" do
+  describe "three tools, middle suspends" do
+    test "echo result in completed, add orphaned cleaned, no tool_results in conversation" do
       plug =
         LLMStub.setup_req_stub(:three_tool_suspend, [
           {:tool_calls,
@@ -162,15 +154,121 @@ defmodule Jido.Composer.Integration.OrchestratorSuspensionConversationTest do
 
       strat = returned_agent.state.__strategy__
       assert %ReqLLM.Context{} = strat.conversation
-      assert_conversation_integrity!(strat.conversation)
 
-      # echo completed normally
-      assert find_tool_result(strat.conversation, "call_echo_1") != nil,
-             "Completed tool (echo) should have its result in conversation"
+      # No tool_results in conversation at suspension time
+      assert all_tool_result_ids(strat.conversation) == []
 
-      # add was never dispatched
-      assert find_tool_result(strat.conversation, "call_add_1") != nil,
-             "Unexecuted tool (add) should have a synthetic result in conversation"
+      # Echo's real result is in tool_concurrency.completed
+      assert Enum.any?(strat.tool_concurrency.completed, &(&1.id == "call_echo_1"))
+
+      # Orphaned add is NOT in pending
+      refute "call_add_1" in strat.tool_concurrency.pending
+    end
+  end
+
+  describe "no duplicate tool_results after resume" do
+    test "suspended call has exactly ONE tool_result in final conversation" do
+      plug =
+        LLMStub.setup_req_stub(:resume_no_dup, [
+          # LLM call 1: suspend
+          {:tool_calls,
+           [%{id: "call_suspend_1", name: "suspend", arguments: %{"checkpoint" => "waiting"}}]},
+          # LLM call 2: final answer after resume
+          {:final_answer, "done"}
+        ])
+
+      agent = SuspendOrchestrator.new()
+      agent = put_in(agent.state.__strategy__.req_options, plug: plug)
+
+      # First query → suspended
+      assert {:suspended, agent, suspension} =
+               SuspendOrchestrator.query_sync(agent, "Please suspend")
+
+      # Resume
+      {agent, directives} =
+        SuspendOrchestrator.cmd(
+          agent,
+          {:suspend_resume,
+           %{
+             suspension_id: suspension.id,
+             data: %{approved: true}
+           }}
+        )
+
+      # Process directives to completion
+      assert {:ok, final_agent, "done"} =
+               Jido.Composer.Orchestrator.DSL.__query_sync_loop__(
+                 SuspendOrchestrator,
+                 agent,
+                 directives
+               )
+
+      strat = final_agent.state.__strategy__
+
+      # Exactly ONE tool_result for the suspended call
+      assert count_tool_results(strat.conversation, "call_suspend_1") == 1
+    end
+  end
+
+  describe "orphaned tool gets not_executed padding at LLM-call time" do
+    test "conversation sent to LLM has all tool_results (real + padded)" do
+      plug =
+        LLMStub.setup_req_stub(:orphan_padding, [
+          # LLM call 1: echo + suspend + add
+          {:tool_calls,
+           [
+             %{id: "call_echo_1", name: "echo", arguments: %{"message" => "hi"}},
+             %{id: "call_suspend_1", name: "suspend", arguments: %{"checkpoint" => "mid"}},
+             %{id: "call_add_1", name: "add", arguments: %{"value" => 1.0, "amount" => 2.0}}
+           ]},
+          # LLM call 2: final answer after resume
+          {:final_answer, "done"}
+        ])
+
+      agent = SuspendOrchestrator.new()
+      agent = put_in(agent.state.__strategy__.req_options, plug: plug)
+
+      # First query → suspended
+      assert {:suspended, agent, suspension} =
+               SuspendOrchestrator.query_sync(agent, "Echo, suspend, add")
+
+      # Resume
+      {agent, directives} =
+        SuspendOrchestrator.cmd(
+          agent,
+          {:suspend_resume,
+           %{
+             suspension_id: suspension.id,
+             data: %{approved: true}
+           }}
+        )
+
+      # Process directives to completion
+      assert {:ok, final_agent, "done"} =
+               Jido.Composer.Orchestrator.DSL.__query_sync_loop__(
+                 SuspendOrchestrator,
+                 agent,
+                 directives
+               )
+
+      strat = final_agent.state.__strategy__
+
+      # All three tool_use IDs should have exactly one tool_result each
+      assert count_tool_results(strat.conversation, "call_echo_1") == 1
+      assert count_tool_results(strat.conversation, "call_suspend_1") == 1
+      assert count_tool_results(strat.conversation, "call_add_1") == 1
+
+      # The orphaned add should have a "not_executed" result
+      [add_result] = find_tool_results(strat.conversation, "call_add_1")
+
+      text_content =
+        Enum.find_value(add_result.content, fn
+          %{type: :text, text: text} -> text
+          _ -> nil
+        end)
+
+      content = Jason.decode!(text_content)
+      assert content["status"] == "not_executed"
     end
   end
 end
