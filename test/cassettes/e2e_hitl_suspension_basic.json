@@ -1,0 +1,325 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2026-03-14T21:44:05.245863Z",
+      "request": {
+        "body_json": {
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "content": "Analyze sales data for Q4 2025",
+              "role": "user"
+            }
+          ],
+          "model": "claude-sonnet-4-20250514",
+          "stream": false,
+          "system": "You are a data analyst assistant. You have two tools:\n- ask_user: Ask the user a clarifying question before proceeding.\n- save_result: Save your final analysis result.\n\nWhen given a task, ALWAYS call ask_user first to clarify requirements.\nAfter receiving the user's response, produce your analysis using save_result.\n",
+          "tools": [
+            {
+              "description": "Ask the user a clarifying question. Call this when you need input before proceeding.",
+              "input_schema": {
+                "properties": {
+                  "input_type": {
+                    "description": "Expected input type: text, choice, or confirm",
+                    "type": "string"
+                  },
+                  "options": {
+                    "description": "Optional list of choices",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "question_text": {
+                    "description": "The question to ask the user",
+                    "type": "string"
+                  }
+                },
+                "required": ["question_text"],
+                "type": "object"
+              },
+              "name": "ask_user"
+            },
+            {
+              "description": "Save the final analysis result. Call when you have completed your analysis.",
+              "input_schema": {
+                "properties": {
+                  "analysis": {
+                    "description": "Summary of the analysis performed",
+                    "type": "string"
+                  },
+                  "answer": {
+                    "description": "The final answer",
+                    "type": "string"
+                  }
+                },
+                "required": ["answer", "analysis"],
+                "type": "object"
+              },
+              "name": "save_result"
+            }
+          ]
+        },
+        "body_type": "json",
+        "headers": {
+          "accept-encoding": ["gzip"],
+          "anthropic-beta": ["tools-2024-05-16"],
+          "anthropic-version": ["2023-06-01"],
+          "content-type": ["application/json"],
+          "user-agent": ["req/0.5.17"]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://api.anthropic.com/v1/messages"
+      },
+      "response": {
+        "body_json": {
+          "content": [
+            {
+              "text": "I need to gather some information about your sales data analysis requirements before I can proceed.",
+              "type": "text"
+            },
+            {
+              "caller": {
+                "type": "direct"
+              },
+              "id": "toolu_01FHw5ZMm2B84b5Pz6atbVQC",
+              "input": {
+                "input_type": "text",
+                "question_text": "To analyze your Q4 2025 sales data effectively, I need to understand your specific requirements. Could you please provide details about:\n\n1. What specific aspects of the sales data you want analyzed (e.g., revenue trends, product performance, regional analysis, customer segments)?\n2. What data sources or format you have available?\n3. Are there any particular metrics or KPIs you're most interested in?\n4. What is the intended use of this analysis (e.g., executive report, performance review, forecasting)?"
+              },
+              "name": "ask_user",
+              "type": "tool_use"
+            }
+          ],
+          "id": "msg_017uTUwDnwDGnCvC7ThhSzCN",
+          "model": "claude-sonnet-4-20250514",
+          "role": "assistant",
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "not_available",
+            "input_tokens": 634,
+            "output_tokens": 204,
+            "service_tier": "standard"
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "anthropic-organization-id": ["a8b30265-cdb3-4bc6-8798-158fb659a7f5"],
+          "anthropic-ratelimit-input-tokens-limit": ["2000000"],
+          "anthropic-ratelimit-input-tokens-remaining": ["2000000"],
+          "anthropic-ratelimit-input-tokens-reset": ["2026-03-14T21:44:01Z"],
+          "anthropic-ratelimit-output-tokens-limit": ["400000"],
+          "anthropic-ratelimit-output-tokens-remaining": ["400000"],
+          "anthropic-ratelimit-output-tokens-reset": ["2026-03-14T21:44:05Z"],
+          "anthropic-ratelimit-requests-limit": ["4000"],
+          "anthropic-ratelimit-requests-remaining": ["3999"],
+          "anthropic-ratelimit-requests-reset": ["2026-03-14T21:43:59Z"],
+          "anthropic-ratelimit-tokens-limit": ["2400000"],
+          "anthropic-ratelimit-tokens-remaining": ["2400000"],
+          "anthropic-ratelimit-tokens-reset": ["2026-03-14T21:44:01Z"],
+          "cf-cache-status": ["DYNAMIC"],
+          "cf-ray": ["9dc67504c9098300-GIG"],
+          "connection": ["keep-alive"],
+          "content-security-policy": [
+            "default-src 'none'; frame-ancestors 'none'"
+          ],
+          "content-type": ["application/json"],
+          "date": ["Sat, 14 Mar 2026 21:44:05 GMT"],
+          "request-id": ["req_011CZ3hjSzKpeCS8CADY4e2g"],
+          "server": ["cloudflare"],
+          "server-timing": ["proxy;dur=5628"],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubDomains; preload"
+          ],
+          "transfer-encoding": ["chunked"],
+          "vary": ["Accept-Encoding"],
+          "x-envoy-upstream-service-time": ["5627"],
+          "x-robots-tag": ["none"]
+        },
+        "status": 200
+      }
+    },
+    {
+      "recorded_at": "2026-03-14T21:44:14.688164Z",
+      "request": {
+        "body_json": {
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "content": "Analyze sales data for Q4 2025",
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "text": "I need to gather some information about your sales data analysis requirements before I can proceed.",
+                  "type": "text"
+                },
+                {
+                  "id": "toolu_01FHw5ZMm2B84b5Pz6atbVQC",
+                  "input": {
+                    "input_type": "text",
+                    "question_text": "To analyze your Q4 2025 sales data effectively, I need to understand your specific requirements. Could you please provide details about:\n\n1. What specific aspects of the sales data you want analyzed (e.g., revenue trends, product performance, regional analysis, customer segments)?\n2. What data sources or format you have available?\n3. Are there any particular metrics or KPIs you're most interested in?\n4. What is the intended use of this analysis (e.g., executive report, performance review, forecasting)?"
+                  },
+                  "name": "ask_user",
+                  "type": "tool_use"
+                }
+              ],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "content": "{\"response\":\"Focus on revenue trends by region\"}",
+                  "tool_use_id": "toolu_01FHw5ZMm2B84b5Pz6atbVQC",
+                  "type": "tool_result"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "claude-sonnet-4-20250514",
+          "stream": false,
+          "system": "You are a data analyst assistant. You have two tools:\n- ask_user: Ask the user a clarifying question before proceeding.\n- save_result: Save your final analysis result.\n\nWhen given a task, ALWAYS call ask_user first to clarify requirements.\nAfter receiving the user's response, produce your analysis using save_result.\n",
+          "tools": [
+            {
+              "description": "Ask the user a clarifying question. Call this when you need input before proceeding.",
+              "input_schema": {
+                "properties": {
+                  "input_type": {
+                    "description": "Expected input type: text, choice, or confirm",
+                    "type": "string"
+                  },
+                  "options": {
+                    "description": "Optional list of choices",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "question_text": {
+                    "description": "The question to ask the user",
+                    "type": "string"
+                  }
+                },
+                "required": ["question_text"],
+                "type": "object"
+              },
+              "name": "ask_user"
+            },
+            {
+              "description": "Save the final analysis result. Call when you have completed your analysis.",
+              "input_schema": {
+                "properties": {
+                  "analysis": {
+                    "description": "Summary of the analysis performed",
+                    "type": "string"
+                  },
+                  "answer": {
+                    "description": "The final answer",
+                    "type": "string"
+                  }
+                },
+                "required": ["answer", "analysis"],
+                "type": "object"
+              },
+              "name": "save_result"
+            }
+          ]
+        },
+        "body_type": "json",
+        "headers": {
+          "accept-encoding": ["gzip"],
+          "anthropic-beta": ["tools-2024-05-16"],
+          "anthropic-version": ["2023-06-01"],
+          "content-type": ["application/json"],
+          "user-agent": ["req/0.5.17"]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://api.anthropic.com/v1/messages"
+      },
+      "response": {
+        "body_json": {
+          "content": [
+            {
+              "caller": {
+                "type": "direct"
+              },
+              "id": "toolu_01FFxgmnWpiPPevMVJiDicRL",
+              "input": {
+                "analysis": "I clarified the user's requirements for Q4 2025 sales data analysis, focusing specifically on revenue trends by region. I developed a comprehensive analytical framework that includes key metrics, analysis approaches, and visualization recommendations. The analysis plan covers regional performance comparison, trend analysis within Q4, growth rate calculations, and market share analysis. I also identified next steps needed to execute this analysis, including data access requirements and historical data needs for meaningful comparisons.",
+                "answer": "Based on your request to analyze Q4 2025 sales data focusing on revenue trends by region, here's the analytical approach:\n\n**Revenue Trends by Region Analysis for Q4 2025**\n\n**Key Metrics to Examine:**\n- Total revenue per region for Q4 2025\n- Month-over-month revenue growth within Q4 (Oct, Nov, Dec)\n- Year-over-year comparison with Q4 2024\n- Regional performance ranking\n- Revenue contribution percentage by region\n\n**Analysis Framework:**\n1. **Regional Performance Comparison**: Compare total Q4 revenue across all regions to identify top and bottom performers\n2. **Trend Analysis**: Examine monthly progression within Q4 to identify seasonal patterns or growth trajectories\n3. **Growth Rate Calculation**: Calculate percentage changes both sequentially (month-to-month) and annually (vs Q4 2024)\n4. **Market Share Analysis**: Determine each region's contribution to total company revenue\n\n**Recommended Visualizations:**\n- Regional revenue bar charts\n- Time series line graphs showing monthly trends\n- Heat maps for regional performance comparison\n- Pie charts for revenue distribution by region\n\n**Next Steps Required:**\n- Access to actual sales data files/database\n- Specific regional boundaries definition\n- Historical data for comparison purposes"
+              },
+              "name": "save_result",
+              "type": "tool_use"
+            }
+          ],
+          "id": "msg_01AvVFXjYEscqdHoLq1zFEd6",
+          "model": "claude-sonnet-4-20250514",
+          "role": "assistant",
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "not_available",
+            "input_tokens": 860,
+            "output_tokens": 441,
+            "service_tier": "standard"
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "anthropic-organization-id": ["a8b30265-cdb3-4bc6-8798-158fb659a7f5"],
+          "anthropic-ratelimit-input-tokens-limit": ["2000000"],
+          "anthropic-ratelimit-input-tokens-remaining": ["2000000"],
+          "anthropic-ratelimit-input-tokens-reset": ["2026-03-14T21:44:06Z"],
+          "anthropic-ratelimit-output-tokens-limit": ["400000"],
+          "anthropic-ratelimit-output-tokens-remaining": ["400000"],
+          "anthropic-ratelimit-output-tokens-reset": ["2026-03-14T21:44:14Z"],
+          "anthropic-ratelimit-requests-limit": ["4000"],
+          "anthropic-ratelimit-requests-remaining": ["3999"],
+          "anthropic-ratelimit-requests-reset": ["2026-03-14T21:44:05Z"],
+          "anthropic-ratelimit-tokens-limit": ["2400000"],
+          "anthropic-ratelimit-tokens-remaining": ["2400000"],
+          "anthropic-ratelimit-tokens-reset": ["2026-03-14T21:44:06Z"],
+          "cf-cache-status": ["DYNAMIC"],
+          "cf-ray": ["9dc675290d558300-GIG"],
+          "connection": ["keep-alive"],
+          "content-security-policy": [
+            "default-src 'none'; frame-ancestors 'none'"
+          ],
+          "content-type": ["application/json"],
+          "date": ["Sat, 14 Mar 2026 21:44:14 GMT"],
+          "request-id": ["req_011CZ3hjso5aCgwmDzupKt9d"],
+          "server": ["cloudflare"],
+          "server-timing": ["proxy;dur=9267"],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubDomains; preload"
+          ],
+          "transfer-encoding": ["chunked"],
+          "vary": ["Accept-Encoding"],
+          "x-envoy-upstream-service-time": ["9266"],
+          "x-robots-tag": ["none"]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "version": "2.0"
+}

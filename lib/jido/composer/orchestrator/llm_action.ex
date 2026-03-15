@@ -58,8 +58,16 @@ defmodule Jido.Composer.Orchestrator.LLMAction do
     ReqLLM.Context.new([ReqLLM.Context.user(query)])
   end
 
-  defp build_context(%ReqLLM.Context{} = context, [], _params) do
-    strip_orphaned_tool_calls(context)
+  defp build_context(%ReqLLM.Context{} = context, [], params) do
+    context = strip_orphaned_tool_calls(context)
+
+    case params[:query] do
+      q when is_binary(q) and q != "" ->
+        ReqLLM.Context.append(context, ReqLLM.Context.user(q))
+
+      _ ->
+        context
+    end
   end
 
   defp build_context(%ReqLLM.Context{} = context, tool_results, _params) do

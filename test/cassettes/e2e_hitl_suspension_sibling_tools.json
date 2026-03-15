@@ -1,0 +1,381 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2026-03-14T21:43:55.829213Z",
+      "request": {
+        "body_json": {
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "content": "Process this dataset: [revenue: $1.2M, users: 5000, churn: 3%]. Confirm receipt and ask me about the output format.",
+              "role": "user"
+            }
+          ],
+          "model": "claude-sonnet-4-20250514",
+          "stream": false,
+          "system": "You are a data processing assistant. You have these tools:\n- echo: Echo a confirmation message back.\n- ask_user: Ask the user a clarifying question.\n- save_result: Save the final result.\n\nIMPORTANT: When given data to process, you MUST call BOTH echo (to confirm receipt)\nAND ask_user (to ask about output format) IN THE SAME TURN as parallel tool calls.\nAfter receiving the user's answer, call save_result.\n",
+          "tools": [
+            {
+              "description": "Ask the user a clarifying question. Call this when you need input before proceeding.",
+              "input_schema": {
+                "properties": {
+                  "input_type": {
+                    "description": "Expected input type: text, choice, or confirm",
+                    "type": "string"
+                  },
+                  "options": {
+                    "description": "Optional list of choices",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "question_text": {
+                    "description": "The question to ask the user",
+                    "type": "string"
+                  }
+                },
+                "required": ["question_text"],
+                "type": "object"
+              },
+              "name": "ask_user"
+            },
+            {
+              "description": "Echoes input params as the result",
+              "input_schema": {
+                "properties": {
+                  "message": {
+                    "description": "Message to echo",
+                    "type": "string"
+                  }
+                },
+                "required": ["message"],
+                "type": "object"
+              },
+              "name": "echo"
+            },
+            {
+              "description": "Save the final analysis result. Call when you have completed your analysis.",
+              "input_schema": {
+                "properties": {
+                  "analysis": {
+                    "description": "Summary of the analysis performed",
+                    "type": "string"
+                  },
+                  "answer": {
+                    "description": "The final answer",
+                    "type": "string"
+                  }
+                },
+                "required": ["answer", "analysis"],
+                "type": "object"
+              },
+              "name": "save_result"
+            }
+          ]
+        },
+        "body_type": "json",
+        "headers": {
+          "accept-encoding": ["gzip"],
+          "anthropic-beta": ["tools-2024-05-16"],
+          "anthropic-version": ["2023-06-01"],
+          "content-type": ["application/json"],
+          "user-agent": ["req/0.5.17"]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://api.anthropic.com/v1/messages"
+      },
+      "response": {
+        "body_json": {
+          "content": [
+            {
+              "text": "I'll process your dataset and confirm receipt while asking about the output format.",
+              "type": "text"
+            },
+            {
+              "caller": {
+                "type": "direct"
+              },
+              "id": "toolu_01YAJr7zweTZx6yMrBCUbpGd",
+              "input": {
+                "message": "Dataset received: [revenue: $1.2M, users: 5000, churn: 3%]. Ready to process this data."
+              },
+              "name": "echo",
+              "type": "tool_use"
+            },
+            {
+              "caller": {
+                "type": "direct"
+              },
+              "id": "toolu_014AdWCfK8MbWvozb9oRGXQM",
+              "input": {
+                "input_type": "text",
+                "question_text": "What output format would you like for the analysis of this dataset? For example: summary report, detailed breakdown, specific metrics calculation, or another format?"
+              },
+              "name": "ask_user",
+              "type": "tool_use"
+            }
+          ],
+          "id": "msg_01XSiZ9ibyR3dN2QfWpZnV93",
+          "model": "claude-sonnet-4-20250514",
+          "role": "assistant",
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "not_available",
+            "input_tokens": 753,
+            "output_tokens": 182,
+            "service_tier": "standard"
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "anthropic-organization-id": ["a8b30265-cdb3-4bc6-8798-158fb659a7f5"],
+          "anthropic-ratelimit-input-tokens-limit": ["2000000"],
+          "anthropic-ratelimit-input-tokens-remaining": ["2000000"],
+          "anthropic-ratelimit-input-tokens-reset": ["2026-03-14T21:43:53Z"],
+          "anthropic-ratelimit-output-tokens-limit": ["400000"],
+          "anthropic-ratelimit-output-tokens-remaining": ["400000"],
+          "anthropic-ratelimit-output-tokens-reset": ["2026-03-14T21:43:55Z"],
+          "anthropic-ratelimit-requests-limit": ["4000"],
+          "anthropic-ratelimit-requests-remaining": ["3999"],
+          "anthropic-ratelimit-requests-reset": ["2026-03-14T21:43:53Z"],
+          "anthropic-ratelimit-tokens-limit": ["2400000"],
+          "anthropic-ratelimit-tokens-remaining": ["2400000"],
+          "anthropic-ratelimit-tokens-reset": ["2026-03-14T21:43:53Z"],
+          "cf-cache-status": ["DYNAMIC"],
+          "cf-ray": ["9dc674db8ef18300-GIG"],
+          "connection": ["keep-alive"],
+          "content-security-policy": [
+            "default-src 'none'; frame-ancestors 'none'"
+          ],
+          "content-type": ["application/json"],
+          "date": ["Sat, 14 Mar 2026 21:43:55 GMT"],
+          "request-id": ["req_011CZ3hixnBhKB5X4shZ1SZf"],
+          "server": ["cloudflare"],
+          "server-timing": ["proxy;dur=2637"],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubDomains; preload"
+          ],
+          "transfer-encoding": ["chunked"],
+          "vary": ["Accept-Encoding"],
+          "x-envoy-upstream-service-time": ["2637"],
+          "x-robots-tag": ["none"]
+        },
+        "status": 200
+      }
+    },
+    {
+      "recorded_at": "2026-03-14T21:43:59.464875Z",
+      "request": {
+        "body_json": {
+          "max_tokens": 64000,
+          "messages": [
+            {
+              "content": "Process this dataset: [revenue: $1.2M, users: 5000, churn: 3%]. Confirm receipt and ask me about the output format.",
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "text": "I'll process your dataset and confirm receipt while asking about the output format.",
+                  "type": "text"
+                },
+                {
+                  "id": "toolu_01YAJr7zweTZx6yMrBCUbpGd",
+                  "input": {
+                    "message": "Dataset received: [revenue: $1.2M, users: 5000, churn: 3%]. Ready to process this data."
+                  },
+                  "name": "echo",
+                  "type": "tool_use"
+                },
+                {
+                  "id": "toolu_014AdWCfK8MbWvozb9oRGXQM",
+                  "input": {
+                    "input_type": "text",
+                    "question_text": "What output format would you like for the analysis of this dataset? For example: summary report, detailed breakdown, specific metrics calculation, or another format?"
+                  },
+                  "name": "ask_user",
+                  "type": "tool_use"
+                }
+              ],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "content": "{\"echoed\":\"Dataset received: [revenue: $1.2M, users: 5000, churn: 3%]. Ready to process this data.\"}",
+                  "tool_use_id": "toolu_01YAJr7zweTZx6yMrBCUbpGd",
+                  "type": "tool_result"
+                },
+                {
+                  "content": "{\"response\":\"Format as a markdown table\"}",
+                  "tool_use_id": "toolu_014AdWCfK8MbWvozb9oRGXQM",
+                  "type": "tool_result"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "claude-sonnet-4-20250514",
+          "stream": false,
+          "system": "You are a data processing assistant. You have these tools:\n- echo: Echo a confirmation message back.\n- ask_user: Ask the user a clarifying question.\n- save_result: Save the final result.\n\nIMPORTANT: When given data to process, you MUST call BOTH echo (to confirm receipt)\nAND ask_user (to ask about output format) IN THE SAME TURN as parallel tool calls.\nAfter receiving the user's answer, call save_result.\n",
+          "tools": [
+            {
+              "description": "Ask the user a clarifying question. Call this when you need input before proceeding.",
+              "input_schema": {
+                "properties": {
+                  "input_type": {
+                    "description": "Expected input type: text, choice, or confirm",
+                    "type": "string"
+                  },
+                  "options": {
+                    "description": "Optional list of choices",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "question_text": {
+                    "description": "The question to ask the user",
+                    "type": "string"
+                  }
+                },
+                "required": ["question_text"],
+                "type": "object"
+              },
+              "name": "ask_user"
+            },
+            {
+              "description": "Echoes input params as the result",
+              "input_schema": {
+                "properties": {
+                  "message": {
+                    "description": "Message to echo",
+                    "type": "string"
+                  }
+                },
+                "required": ["message"],
+                "type": "object"
+              },
+              "name": "echo"
+            },
+            {
+              "description": "Save the final analysis result. Call when you have completed your analysis.",
+              "input_schema": {
+                "properties": {
+                  "analysis": {
+                    "description": "Summary of the analysis performed",
+                    "type": "string"
+                  },
+                  "answer": {
+                    "description": "The final answer",
+                    "type": "string"
+                  }
+                },
+                "required": ["answer", "analysis"],
+                "type": "object"
+              },
+              "name": "save_result"
+            }
+          ]
+        },
+        "body_type": "json",
+        "headers": {
+          "accept-encoding": ["gzip"],
+          "anthropic-beta": ["tools-2024-05-16"],
+          "anthropic-version": ["2023-06-01"],
+          "content-type": ["application/json"],
+          "user-agent": ["req/0.5.17"]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://api.anthropic.com/v1/messages"
+      },
+      "response": {
+        "body_json": {
+          "content": [
+            {
+              "text": "Perfect! I'll now process your dataset and format it as a markdown table.",
+              "type": "text"
+            },
+            {
+              "caller": {
+                "type": "direct"
+              },
+              "id": "toolu_011btdWGtCh1q9JoKceB1Xic",
+              "input": {
+                "analysis": "Processed the provided dataset containing three key business metrics: revenue of $1.2M, user count of 5,000, and churn rate of 3%. Formatted the data into a clean markdown table with two columns (Metric and Value) as requested by the user.",
+                "answer": "| Metric | Value |\n|--------|--------|\n| Revenue | $1.2M |\n| Users | 5,000 |\n| Churn Rate | 3% |"
+              },
+              "name": "save_result",
+              "type": "tool_use"
+            }
+          ],
+          "id": "msg_01GV61bkeqUsbBDtKGEjYwSA",
+          "model": "claude-sonnet-4-20250514",
+          "role": "assistant",
+          "stop_reason": "tool_use",
+          "stop_sequence": null,
+          "type": "message",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "not_available",
+            "input_tokens": 1040,
+            "output_tokens": 186,
+            "service_tier": "standard"
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "anthropic-organization-id": ["a8b30265-cdb3-4bc6-8798-158fb659a7f5"],
+          "anthropic-ratelimit-input-tokens-limit": ["2000000"],
+          "anthropic-ratelimit-input-tokens-remaining": ["2000000"],
+          "anthropic-ratelimit-input-tokens-reset": ["2026-03-14T21:43:56Z"],
+          "anthropic-ratelimit-output-tokens-limit": ["400000"],
+          "anthropic-ratelimit-output-tokens-remaining": ["400000"],
+          "anthropic-ratelimit-output-tokens-reset": ["2026-03-14T21:43:59Z"],
+          "anthropic-ratelimit-requests-limit": ["4000"],
+          "anthropic-ratelimit-requests-remaining": ["3999"],
+          "anthropic-ratelimit-requests-reset": ["2026-03-14T21:43:55Z"],
+          "anthropic-ratelimit-tokens-limit": ["2400000"],
+          "anthropic-ratelimit-tokens-remaining": ["2400000"],
+          "anthropic-ratelimit-tokens-reset": ["2026-03-14T21:43:56Z"],
+          "cf-cache-status": ["DYNAMIC"],
+          "cf-ray": ["9dc674ee196a8300-GIG"],
+          "connection": ["keep-alive"],
+          "content-security-policy": [
+            "default-src 'none'; frame-ancestors 'none'"
+          ],
+          "content-type": ["application/json"],
+          "date": ["Sat, 14 Mar 2026 21:43:59 GMT"],
+          "request-id": ["req_011CZ3hjBUvczK4thNosKdPD"],
+          "server": ["cloudflare"],
+          "server-timing": ["proxy;dur=3473"],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubDomains; preload"
+          ],
+          "transfer-encoding": ["chunked"],
+          "vary": ["Accept-Encoding"],
+          "x-envoy-upstream-service-time": ["3472"],
+          "x-robots-tag": ["none"]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "version": "2.0"
+}

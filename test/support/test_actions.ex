@@ -328,4 +328,45 @@ defmodule Jido.Composer.TestActions do
       {:error, "validation failed: confidence out of range"}
     end
   end
+
+  defmodule AskUserAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "ask_user",
+      description:
+        "Ask the user a clarifying question. Call this when you need input before proceeding.",
+      schema: [
+        question_text: [type: :string, required: true, doc: "The question to ask the user"],
+        options: [type: {:list, :string}, required: false, doc: "Optional list of choices"],
+        input_type: [
+          type: :string,
+          required: false,
+          doc: "Expected input type: text, choice, or confirm"
+        ]
+      ]
+
+    def run(params, _context) do
+      {:ok,
+       %{
+         question: params.question_text,
+         options: Map.get(params, :options, []),
+         input_type: Map.get(params, :input_type, "text")
+       }, :suspend}
+    end
+  end
+
+  defmodule SaveResultAction do
+    @moduledoc false
+    use Jido.Action,
+      name: "save_result",
+      description: "Save the final analysis result. Call when you have completed your analysis.",
+      schema: [
+        answer: [type: :string, required: true, doc: "The final answer"],
+        analysis: [type: :string, required: true, doc: "Summary of the analysis performed"]
+      ]
+
+    def run(%{answer: answer, analysis: analysis}, _context) do
+      {:ok, %{answer: answer, analysis: analysis}}
+    end
+  end
 end
