@@ -273,7 +273,7 @@ For each implementation step:
 
 ### Test-First Implementation Order
 
-Each step in the [implementation plan](../../PLAN.md) follows this pattern:
+Each implementation step follows this pattern:
 
 | Phase | Action                                    | Outcome                        |
 | ----- | ----------------------------------------- | ------------------------------ |

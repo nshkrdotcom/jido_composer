@@ -4,7 +4,7 @@
 
 ## Quick Start
 
-- **Design**: See `PLAN.md` for architecture, modules, and implementation order
+- **Design**: See `docs/design/` for architecture and design documentation
 - **Stack**: Pure Elixir library — no Phoenix, no database
 
 ## Core Tech Stack
@@ -25,8 +25,6 @@ jido_composer provides two composition patterns for Jido agents:
 
 Both share a **Node** abstraction (uniform `context → context` interface) and
 support arbitrary nesting.
-
-See `PLAN.md` for the complete design.
 
 ## Daily Commands
 
