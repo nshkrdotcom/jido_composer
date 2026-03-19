@@ -12,6 +12,9 @@ defmodule Jido.Composer.Workflow.Strategy do
   child agent error, or transition error) is stored and threaded through to
   observability spans and the DSL's `check_terminal` function. Callers receive
   the original error rather than a generic `:workflow_failed` atom.
+
+  Every path that sets `status: :failure` also closes the agent observability
+  span, ensuring telemetry is emitted on all failure scenarios.
   """
 
   use Jido.Agent.Strategy
@@ -138,9 +141,7 @@ defmodule Jido.Composer.Workflow.Strategy do
 
           {:error, reason} ->
             agent = put_machine(agent, machine)
-            agent = put_error_reason(agent, reason)
-            agent = StratState.set_status(agent, :failure)
-            {agent, []}
+            {fail_with_span(agent, reason), []}
         end
 
       %{status: :error} ->
@@ -156,9 +157,7 @@ defmodule Jido.Composer.Workflow.Strategy do
             handle_after_transition(agent)
 
           {:error, _reason} ->
-            agent = put_error_reason(agent, error_reason)
-            agent = StratState.set_status(agent, :failure)
-            {agent, []}
+            {fail_with_span(agent, error_reason), []}
         end
     end
   end
@@ -209,9 +208,7 @@ defmodule Jido.Composer.Workflow.Strategy do
 
           {:error, reason} ->
             agent = put_machine(agent, machine)
-            agent = put_error_reason(agent, reason)
-            agent = StratState.set_status(agent, :failure)
-            {agent, []}
+            {fail_with_span(agent, reason), []}
         end
 
       %{result: {:error, reason}} ->
@@ -222,9 +219,7 @@ defmodule Jido.Composer.Workflow.Strategy do
             handle_after_transition(agent)
 
           {:error, _reason} ->
-            agent = put_error_reason(agent, reason)
-            agent = StratState.set_status(agent, :failure)
-            {agent, []}
+            {fail_with_span(agent, reason), []}
         end
     end
   end
@@ -321,9 +316,7 @@ defmodule Jido.Composer.Workflow.Strategy do
             handle_after_transition(agent)
 
           {:error, reason} ->
-            agent = put_error_reason(agent, reason)
-            agent = StratState.set_status(agent, :failure)
-            {agent, []}
+            {fail_with_span(agent, reason), []}
         end
 
       has_suspended_fan_out_branch?(strat, suspension_id) ->
@@ -657,9 +650,7 @@ defmodule Jido.Composer.Workflow.Strategy do
 
       {:error, reason} ->
         agent = put_machine(agent, machine)
-        agent = put_error_reason(agent, reason)
-        agent = StratState.set_status(agent, :failure)
-        {agent, []}
+        {fail_with_span(agent, reason), []}
     end
   end
 
@@ -693,12 +684,8 @@ defmodule Jido.Composer.Workflow.Strategy do
 
       {:error, reason} ->
         agent = put_machine(agent, machine)
-        agent = put_error_reason(agent, reason)
-        agent = StratState.set_status(agent, :failure)
-
-        agent =
-          StratState.update(agent, fn s -> %{s | pending_suspension: nil} end)
-
+        agent = fail_with_span(agent, reason)
+        agent = StratState.update(agent, fn s -> %{s | pending_suspension: nil} end)
         {agent, []}
     end
   end
@@ -728,6 +715,13 @@ defmodule Jido.Composer.Workflow.Strategy do
 
   defp put_error_reason(agent, reason) do
     StratState.update(agent, fn s -> %{s | error_reason: reason} end)
+  end
+
+  defp fail_with_span(agent, error_reason) do
+    agent = put_error_reason(agent, error_reason)
+    agent = StratState.set_status(agent, :failure)
+    agent = finish_agent_span(agent, %{error: error_reason})
+    agent
   end
 
   # -- FanOut helpers --
@@ -806,9 +800,7 @@ defmodule Jido.Composer.Workflow.Strategy do
 
           {:error, reason} ->
             agent = put_machine(agent, machine)
-            agent = put_error_reason(agent, reason)
-            agent = StratState.set_status(agent, :failure)
-            {agent, []}
+            {fail_with_span(agent, reason), []}
         end
 
       :suspended ->
@@ -890,6 +882,7 @@ defmodule Jido.Composer.Workflow.Strategy do
 
       {:error, _transition_reason} ->
         agent = StratState.set_status(agent, :failure)
+        agent = finish_agent_span(agent, %{error: reason})
         {agent, stop_directives}
     end
   end
@@ -901,6 +894,18 @@ defmodule Jido.Composer.Workflow.Strategy do
       success_states = Map.get(strat, :success_states, [:done])
       status = if strat.machine.status in success_states, do: :success, else: :failure
       agent = StratState.set_status(agent, status)
+
+      extra =
+        if status == :failure do
+          case Map.get(strat, :error_reason) do
+            nil -> %{}
+            er -> %{error: er}
+          end
+        else
+          %{}
+        end
+
+      agent = finish_agent_span(agent, extra)
       {agent, extra_directives}
     else
       {agent, node_directives} = dispatch_current_node(agent)

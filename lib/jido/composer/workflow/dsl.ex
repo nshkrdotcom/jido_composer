@@ -93,9 +93,9 @@ defmodule Jido.Composer.Workflow.DSL do
       Runs the workflow synchronously, blocking until terminal state.
 
       Returns `{:ok, result_map}` on success or `{:error, reason}` on failure.
-      The `reason` preserves the original error from the failing node (e.g., a
-      `Jido.Action.Error` struct or a child agent's error). Falls back to
-      `:workflow_failed` when no specific error was captured.
+      The `reason` preserves the original error from the failing node — typically
+      a `Jido.Action.Error` struct, a child agent's error, or a transition error.
+      Callers can pattern-match on the error type for specific handling.
 
       If the workflow suspends (e.g., at a HumanNode), returns
       `{:error, {:suspended, suspension}}`.

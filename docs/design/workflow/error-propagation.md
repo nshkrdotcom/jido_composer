@@ -50,13 +50,29 @@ status:
 [`Obs.finish_agent_span/3`](../observability.md) uses `error_reason` when
 emitting failure measurements:
 
-- `handle_after_transition` passes `%{error: error_reason}` as extra
-  measurements when the terminal status is `:failure`
+- `handle_after_transition` and `handle_after_transition_with_directives` pass
+  `%{error: error_reason}` as extra measurements when the terminal status is
+  `:failure`
+- Direct-failure paths (transition errors that bypass `handle_after_transition`)
+  use `fail_with_span/2` to atomically set `error_reason`, set failure status,
+  and close the agent span in a single call
 - `Obs.finish_agent_span` falls back to `state[:error_reason]` when no `:error`
   key is present in measurements, then to `"workflow failed"` as a last resort
 
+Every path that sets `status: :failure` also closes the agent span. This
+prevents span leaks that would otherwise make errors invisible to telemetry.
+
 Node-level spans also receive the actual error via measurements extracted from
 the result params.
+
+### Orchestrator Span Closure
+
+The orchestrator strategy closes agent and iteration spans on all error paths:
+
+- Max iterations exceeded: closes both iteration and agent spans
+- Approval gate partition error: closes both spans
+- Approval rejection with `:abort_iteration`: closes agent span
+- LLM errors and parse failures: already closed in the original implementation
 
 ## DSL Surface
 

@@ -34,9 +34,9 @@ defmodule Jido.Composer.Workflow do
   - `new/0` — Create a new agent instance
   - `run/2` — Start the workflow, returns `{agent, directives}`
   - `run_sync/2` — Run to completion, returns `{:ok, result}` or `{:error, reason}`.
-    On failure, `reason` is the original error from the failing node (e.g., a
-    `Jido.Action.Error` struct), not a generic atom. Falls back to
-    `:workflow_failed` when no specific error was captured.
+    On failure, `reason` is the original error from the failing node — typically a
+    `Jido.Action.Error` struct, a child agent's error, or a transition error.
+    Callers can pattern-match on the error type for specific handling.
 
   See the [Workflows Guide](workflows.md) for all DSL options, node types,
   transitions, fan-out, and compile-time validation.

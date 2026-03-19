@@ -228,9 +228,11 @@ Error reasons flow from the failing node through the strategy to the caller:
    transition error is captured
 4. **FanOut errors** — In `:fail_fast` mode, the first branch error is captured
 
-If no error reason was captured (e.g., the workflow reached a `:failed` terminal
-state via a valid transition without an explicit error), `run_sync` falls back to
-`{:error, :workflow_failed}` for backward compatibility.
+In practice, every failure path captures the original error. The only scenario
+where `run_sync` returns the generic `{:error, :workflow_failed}` is if the
+workflow reaches a `:failed` terminal state through a valid transition without
+any node having errored — an edge case that typically indicates a workflow
+design issue rather than a runtime failure.
 
 ## Context Accumulation
 
