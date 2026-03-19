@@ -14,7 +14,8 @@ defmodule JidoComposer.MixProject do
       docs: docs(),
       name: "Jido Composer",
       source_url: "https://github.com/lostbean/jido_composer",
-      description: "Composable agent flows via FSM for the Jido ecosystem",
+      description:
+        "Composable multi-agent workflows and LLM orchestrators with human-in-the-loop, checkpointing, and OpenTelemetry observability",
       package: package()
     ]
   end
